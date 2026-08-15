@@ -11,4 +11,5 @@ uploads/
 TestResults/
 coverage/
 .publish-check/
+deploy/
 *.db
