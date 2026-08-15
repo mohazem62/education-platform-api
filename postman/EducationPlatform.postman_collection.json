@@ -1,0 +1,12 @@
+{
+  "info": { "name": "Education Platform API", "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json" },
+  "variable": [ { "key": "baseUrl", "value": "https://localhost:7001" }, { "key": "accessToken", "value": "" }, { "key": "refreshToken", "value": "" } ],
+  "item": [
+    { "name": "Auth", "item": [
+      { "name": "Login", "request": { "method": "POST", "header": [ { "key": "Content-Type", "value": "application/json" } ], "body": { "mode": "raw", "raw": "{\"userName\":\"admin\",\"password\":\"CHANGE_ME\",\"device\":\"Postman\"}" }, "url": "{{baseUrl}}/api/v1/auth/login" } },
+      { "name": "Me", "request": { "method": "GET", "header": [ { "key": "Authorization", "value": "Bearer {{accessToken}}" } ], "url": "{{baseUrl}}/api/v1/auth/me" } }
+    ] },
+    { "name": "Students", "item": [ { "name": "List", "request": { "method": "GET", "header": [ { "key": "Authorization", "value": "Bearer {{accessToken}}" }, { "key": "Accept-Language", "value": "ar" } ], "url": "{{baseUrl}}/api/v1/students?pageNumber=1&pageSize=20" } } ] },
+    { "name": "Health", "request": { "method": "GET", "url": "{{baseUrl}}/health/live" } }
+  ]
+}

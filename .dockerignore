@@ -1,0 +1,10 @@
+**/bin
+**/obj
+.git
+.vs
+.env
+uploads
+TestResults
+docs
+postman
+tests
