@@ -43,8 +43,8 @@ public sealed record RefreshRequest(string RefreshToken, string? Device);
 public sealed record ChangePasswordRequest(string CurrentPassword, string NewPassword);
 public sealed record ForgotPasswordRequest(string Email);
 public sealed record ResetPasswordRequest(string Email, string Token, string NewPassword);
-public sealed record AuthResponse(string AccessToken, DateTimeOffset AccessTokenExpiresAt, string RefreshToken, DateTimeOffset RefreshTokenExpiresAt);
 public sealed record CurrentUserResponse(string Id, string UserName, string? Email, IReadOnlyList<string> Roles);
+public sealed record AuthResponse(string AccessToken, DateTimeOffset AccessTokenExpiresAt, string RefreshToken, DateTimeOffset RefreshTokenExpiresAt, CurrentUserResponse User);
 
 public sealed record CreateStudentRequest(string UserName, string Password, string FullName, string PhoneNumber, string? ParentName, string? ParentPhoneNumber, Guid GradeLevelId, Guid CurriculumId, IReadOnlyList<Guid> SubjectIds, DateTimeOffset? ExpirationDate);
 public sealed record UpdateStudentRequest(string FullName, string PhoneNumber, string? ParentName, string? ParentPhoneNumber, Guid GradeLevelId, Guid CurriculumId, IReadOnlyList<Guid> SubjectIds, DateTimeOffset? ExpirationDate, string Status);

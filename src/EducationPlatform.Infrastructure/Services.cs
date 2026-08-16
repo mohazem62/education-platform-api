@@ -88,7 +88,8 @@ public sealed class AuthService(AppDbContext db, UserManager<ApplicationUser> us
         var refreshExpires = clock.UtcNow.AddDays(_jwt.RefreshTokenDays);
         db.RefreshTokens.Add(new RefreshToken { UserId = user.Id, TokenHash = Hash(refresh), ExpiresAt = refreshExpires, CreatedByIp = current.IpAddress, Device = device });
         if (save) await db.SaveChangesAsync(ct);
-        return new(new JwtSecurityTokenHandler().WriteToken(token), expires, refresh, refreshExpires);
+        var currentUser = new CurrentUserResponse(user.Id, user.UserName!, user.Email, roles.ToArray());
+        return new(new JwtSecurityTokenHandler().WriteToken(token), expires, refresh, refreshExpires, currentUser);
     }
     private async Task RevokeUserTokens(string userId, CancellationToken ct) { var active = await db.RefreshTokens.Where(x => x.UserId == userId && x.RevokedAt == null).ToListAsync(ct); foreach (var x in active) x.RevokedAt = clock.UtcNow; await db.SaveChangesAsync(ct); }
     private static string Hash(string token) => Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(token)));
