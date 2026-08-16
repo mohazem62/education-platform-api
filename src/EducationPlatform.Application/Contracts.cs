@@ -63,6 +63,8 @@ public sealed record PaymentRequest(decimal Amount, string Currency, string Paym
 public sealed record AssignmentRequest(Guid SubjectId, string Title, string? Description, DateTimeOffset DueDate, decimal MaxGrade, IReadOnlyList<Guid> StudentIds, bool Publish);
 public sealed record SubmissionRequest(string? TextAnswer, bool Submit);
 public sealed record GradeRequest(decimal Grade, string? Feedback);
+public sealed record TeacherAssignmentOverviewResponse(Guid SubjectId, string SubjectName, int TotalAssignments, int ExpectedSubmissions, int SubmittedCount, int PendingGradingCount, int GradedCount, int NotSubmittedCount, decimal SubmissionPercentage);
+public sealed record TeacherSubmissionRowResponse(Guid AssignmentId, Guid? SubmissionId, Guid StudentId, string StudentName, string GradeLevelName, Guid SubjectId, string SubjectName, string AssignmentTitle, decimal MaxGrade, string Status, DateTimeOffset? SubmittedAt, decimal? Grade, string? Feedback);
 public sealed record ExpenseRequest(string Category, string Description, decimal Amount, DateOnly ExpenseDate, string? Reference);
 public sealed record PartnerShareRequest(Guid PartnerId, decimal Percentage, DateOnly EffectiveFrom, DateOnly? EffectiveTo);
 public sealed record FinancialPeriodRequest(DateOnly StartDate, DateOnly EndDate);

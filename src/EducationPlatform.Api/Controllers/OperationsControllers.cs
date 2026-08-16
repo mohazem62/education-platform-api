@@ -34,6 +34,75 @@ public sealed class MaterialsController(AppDbContext db, IFileStorageService sto
 public sealed class SubmissionsController(AppDbContext db, ICurrentUser current) : ControllerBase
 {
     [HttpGet, Authorize(Policy = "TeacherOnly")] public async Task<IActionResult> List(CancellationToken ct) { var teacher = await db.Teachers.Where(x => x.UserId == current.UserId).Select(x => x.Id).SingleAsync(ct); return Ok(ApiResponse<object>.Ok(await db.AssignmentSubmissions.Where(x => db.Assignments.Any(a => a.Id == x.AssignmentId && a.TeacherId == teacher)).Select(x => new { x.Id, x.AssignmentId, x.StudentId, x.TextAnswer, status = x.Status.ToString(), x.SubmittedAt, x.Grade, x.TeacherFeedback }).ToListAsync(ct))); }
+
+    [HttpGet("teacher-view"), Authorize(Policy = "TeacherOnly")]
+    public async Task<ActionResult<ApiResponse<PageResult<TeacherSubmissionRowResponse>>>> TeacherView(
+        [FromQuery] PageRequest page, [FromQuery] Guid? subjectId, [FromQuery] string? status, CancellationToken ct)
+    {
+        var teacherId = await db.Teachers.Where(x => x.UserId == current.UserId).Select(x => x.Id).SingleAsync(ct);
+        var normalizedStatus = string.IsNullOrWhiteSpace(status) ? "all" : status.Trim().Replace("-", "").Replace("_", "").ToLowerInvariant();
+        if (normalizedStatus is not ("all" or "notsubmitted" or "pendinggrading" or "graded"))
+            throw new AppException(422, ErrorCodes.Validation, "status must be All, NotSubmitted, PendingGrading, or Graded.", "status");
+
+        var query =
+            from target in db.AssignmentTargets.AsNoTracking()
+            join assignment in db.Assignments.AsNoTracking() on target.AssignmentId equals assignment.Id
+            join student in db.Students.AsNoTracking() on target.StudentId equals student.Id
+            join gradeLevel in db.GradeLevels.AsNoTracking() on student.GradeLevelId equals gradeLevel.Id
+            join subject in db.Subjects.AsNoTracking() on assignment.SubjectId equals subject.Id
+            join submission in db.AssignmentSubmissions.AsNoTracking()
+                on new { target.AssignmentId, target.StudentId } equals new { submission.AssignmentId, submission.StudentId } into submissions
+            from submission in submissions.DefaultIfEmpty()
+            where assignment.TeacherId == teacherId && assignment.Status != AssignmentStatus.Draft
+            select new
+            {
+                target.AssignmentId,
+                SubmissionId = submission == null ? (Guid?)null : submission.Id,
+                target.StudentId,
+                StudentName = student.FullName,
+                GradeLevelName = gradeLevel.NameAr,
+                assignment.SubjectId,
+                SubjectName = subject.NameAr,
+                AssignmentTitle = assignment.Title,
+                assignment.MaxGrade,
+                SubmissionStatus = submission == null ? (SubmissionStatus?)null : submission.Status,
+                SubmittedAt = submission == null ? null : submission.SubmittedAt,
+                Grade = submission == null ? null : submission.Grade,
+                Feedback = submission == null ? null : submission.TeacherFeedback
+            };
+
+        if (subjectId.HasValue) query = query.Where(x => x.SubjectId == subjectId.Value);
+        if (!string.IsNullOrWhiteSpace(page.Search))
+        {
+            var search = page.Search.Trim();
+            query = query.Where(x => x.StudentName.Contains(search));
+        }
+        query = normalizedStatus switch
+        {
+            "notsubmitted" => query.Where(x => x.SubmissionStatus == null || x.SubmissionStatus == SubmissionStatus.Draft),
+            "pendinggrading" => query.Where(x => x.SubmissionStatus == SubmissionStatus.Submitted || x.SubmissionStatus == SubmissionStatus.Late || x.SubmissionStatus == SubmissionStatus.Returned),
+            "graded" => query.Where(x => x.SubmissionStatus == SubmissionStatus.Graded),
+            _ => query
+        };
+
+        var pageNumber = Math.Max(1, page.PageNumber);
+        var pageSize = Math.Clamp(page.PageSize, 1, 100);
+        var totalCount = await query.CountAsync(ct);
+        var rawItems = await query.OrderByDescending(x => x.SubmittedAt).ThenBy(x => x.StudentName).ThenBy(x => x.AssignmentTitle)
+            .Skip((pageNumber - 1) * pageSize).Take(pageSize).ToListAsync(ct);
+        var items = rawItems.Select(x => new TeacherSubmissionRowResponse(
+            x.AssignmentId, x.SubmissionId, x.StudentId, x.StudentName, x.GradeLevelName, x.SubjectId, x.SubjectName,
+            x.AssignmentTitle, x.MaxGrade,
+            x.SubmissionStatus switch
+            {
+                null or SubmissionStatus.Draft => "NotSubmitted",
+                SubmissionStatus.Graded => "Graded",
+                _ => "PendingGrading"
+            },
+            x.SubmittedAt, x.Grade, x.Feedback)).ToList();
+
+        return Ok(ApiResponse<PageResult<TeacherSubmissionRowResponse>>.Ok(new(items, pageNumber, pageSize, totalCount)));
+    }
 }
 
 [ApiController, Route("api/v1/finance"), Authorize(Policy = "FinancialAdmin")]

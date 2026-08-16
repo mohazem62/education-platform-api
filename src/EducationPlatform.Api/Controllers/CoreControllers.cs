@@ -74,6 +74,42 @@ public sealed class AttendanceController(ISessionService service, AppDbContext d
 public sealed class AssignmentsController(ILearningService service, AppDbContext db, ICurrentUser current) : ControllerBase
 {
     [HttpGet] public async Task<IActionResult> List(CancellationToken ct) { var q = db.Assignments.AsNoTracking().Where(x => x.Status == EducationPlatform.Domain.AssignmentStatus.Published); if (User.IsInRole("Teacher")) { var id = await db.Teachers.Where(x => x.UserId == current.UserId).Select(x => x.Id).SingleAsync(ct); q = q.Where(x => x.TeacherId == id); } else if (User.IsInRole("Student")) { var id = await db.Students.Where(x => x.UserId == current.UserId).Select(x => x.Id).SingleAsync(ct); q = q.Where(x => x.Targets.Any(t => t.StudentId == id)); } else if (!User.IsInRole("Admin") && !User.IsInRole("Moderator")) throw new AppException(403, ErrorCodes.Forbidden, "غير مسموح."); return Ok(ApiResponse<object>.Ok(await q.OrderBy(x => x.DueDate).Select(x => new { x.Id, x.TeacherId, x.SubjectId, x.Title, x.Description, x.DueDate, x.MaxGrade, status = x.Status.ToString() }).ToListAsync(ct))); }
+    [HttpGet("teacher-overview"), Authorize(Policy = "TeacherOnly")]
+    public async Task<ActionResult<ApiResponse<IReadOnlyList<TeacherAssignmentOverviewResponse>>>> TeacherOverview(CancellationToken ct)
+    {
+        var teacherId = await db.Teachers.Where(x => x.UserId == current.UserId).Select(x => x.Id).SingleAsync(ct);
+        var assignments = await db.Assignments.AsNoTracking()
+            .Where(x => x.TeacherId == teacherId && x.Status != EducationPlatform.Domain.AssignmentStatus.Draft)
+            .Join(db.Subjects, assignment => assignment.SubjectId, subject => subject.Id,
+                (assignment, subject) => new { assignment.Id, assignment.SubjectId, SubjectName = subject.NameAr })
+            .ToListAsync(ct);
+        var assignmentIds = assignments.Select(x => x.Id).ToArray();
+        var targets = await db.AssignmentTargets.AsNoTracking()
+            .Where(x => assignmentIds.Contains(x.AssignmentId))
+            .Select(x => new
+            {
+                x.AssignmentId,
+                SubmissionStatus = db.AssignmentSubmissions
+                    .Where(s => s.AssignmentId == x.AssignmentId && s.StudentId == x.StudentId)
+                    .Select(s => (EducationPlatform.Domain.SubmissionStatus?)s.Status)
+                    .FirstOrDefault()
+            })
+            .ToListAsync(ct);
+
+        var result = assignments.GroupBy(x => new { x.SubjectId, x.SubjectName }).Select(group =>
+        {
+            var ids = group.Select(x => x.Id).ToHashSet();
+            var subjectTargets = targets.Where(x => ids.Contains(x.AssignmentId)).ToList();
+            var submitted = subjectTargets.Count(x => x.SubmissionStatus is not null and not EducationPlatform.Domain.SubmissionStatus.Draft);
+            var graded = subjectTargets.Count(x => x.SubmissionStatus == EducationPlatform.Domain.SubmissionStatus.Graded);
+            var pending = subjectTargets.Count(x => x.SubmissionStatus is EducationPlatform.Domain.SubmissionStatus.Submitted or EducationPlatform.Domain.SubmissionStatus.Late or EducationPlatform.Domain.SubmissionStatus.Returned);
+            var expected = subjectTargets.Count;
+            return new TeacherAssignmentOverviewResponse(group.Key.SubjectId, group.Key.SubjectName, group.Count(), expected, submitted, pending, graded,
+                expected - submitted, expected == 0 ? 0 : Math.Round(submitted * 100m / expected, 2));
+        }).OrderBy(x => x.SubjectName).ToList();
+
+        return Ok(ApiResponse<IReadOnlyList<TeacherAssignmentOverviewResponse>>.Ok(result));
+    }
     [HttpPost, Authorize(Policy = "TeacherOnly")] public async Task<IActionResult> Create(AssignmentRequest request, CancellationToken ct) => StatusCode(201, ApiResponse<object>.Ok(new { id = await service.CreateAssignmentAsync(request, ct) }));
     [HttpPut("{id:guid}/submission"), Authorize(Policy = "StudentOnly")] public async Task<IActionResult> Submit(Guid id, SubmissionRequest request, CancellationToken ct) => Ok(ApiResponse<object>.Ok(new { id = await service.UpsertSubmissionAsync(id, request, ct) }));
     [HttpPost("submissions/{id:guid}/grade"), Authorize(Policy = "TeacherOnly")] public async Task<IActionResult> Grade(Guid id, GradeRequest request, CancellationToken ct) { await service.GradeAsync(id, request, ct); return NoContent(); }
