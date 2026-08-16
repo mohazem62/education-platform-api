@@ -17,7 +17,7 @@ public static class DependencyInjection
         services.Configure<JwtOptions>(configuration.GetSection(JwtOptions.Section));
         services.Configure<FileStorageOptions>(configuration.GetSection(FileStorageOptions.Section));
         services.Configure<BusinessOptions>(configuration.GetSection(BusinessOptions.Section));
-        services.AddDbContext<AppDbContext>(o => o.UseSqlServer(configuration.GetConnectionString("DefaultConnection"), sql => sql.EnableRetryOnFailure()));
+        services.AddDbContext<AppDbContext>(o => o.UseSqlServer(configuration.GetConnectionString("DefaultConnection")));
         services.AddIdentityCore<ApplicationUser>(o =>
         {
             o.Password.RequiredLength = configuration.GetValue("Security:PasswordRequiredLength", 10);
