@@ -1,4 +1,5 @@
 using System.Net;
+using System.Net.Http.Json;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Extensions.Configuration;
 
@@ -12,6 +13,8 @@ public sealed class ApiSmokeTests : IClassFixture<WebApplicationFactory<Program>
     [Fact] public async Task Swagger_is_grouped_by_consumer_role() { var json = await _client.GetStringAsync("/swagger/v1/swagger.json"); foreach (var tag in new[] { "Authentication", "Student APIs", "Teacher APIs", "Admin & Partner APIs", "Shared APIs" }) Assert.Contains(tag, json); }
     [Fact] public async Task Swagger_exposes_teacher_assignments_page_endpoints() { var json = await _client.GetStringAsync("/swagger/v1/swagger.json"); Assert.Contains("/api/v1/assignments/teacher-overview", json); Assert.Contains("/api/v1/submissions/teacher-view", json); }
     [Fact] public async Task Swagger_exposes_home_cards_and_schedule_endpoints() { var json = await _client.GetStringAsync("/swagger/v1/swagger.json"); Assert.Contains("/api/v1/home/cards", json); Assert.Contains("/api/v1/home/schedule", json); Assert.Contains("zoomUrl", json, StringComparison.OrdinalIgnoreCase); }
+    [Fact] public async Task Swagger_exposes_moderator_and_weekly_schedule_management() { var json = await _client.GetStringAsync("/swagger/v1/swagger.json"); Assert.Contains("/api/v1/moderators", json); Assert.Contains("/api/v1/schedules", json); Assert.Contains("stageRates", json, StringComparison.OrdinalIgnoreCase); Assert.Contains("teacherAssignments", json, StringComparison.OrdinalIgnoreCase); }
+    [Fact] public async Task Anonymous_user_cannot_modify_weekly_schedule() { var response = await _client.PostAsJsonAsync("/api/v1/schedules", new { }); Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode); }
     [Fact] public async Task Login_contract_includes_user_roles() { var json = await _client.GetStringAsync("/swagger/v1/swagger.json"); Assert.Contains("CurrentUserResponse", json); Assert.Contains("roles", json, StringComparison.OrdinalIgnoreCase); }
     [Fact] public async Task Protected_student_endpoint_rejects_anonymous_access() { var response = await _client.GetAsync("/api/v1/students"); Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode); }
     [Fact] public async Task Liveness_does_not_require_database() { var response = await _client.GetAsync("/health/live"); Assert.Equal(HttpStatusCode.OK, response.StatusCode); }

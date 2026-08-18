@@ -18,8 +18,54 @@ public sealed class UsersController(UserManager<ApplicationUser> users, AppDbCon
     [HttpPost("{id}/deactivate")] public async Task<IActionResult> Deactivate(string id) { var u = await users.FindByIdAsync(id) ?? throw new AppException(404, ErrorCodes.NotFound, "المستخدم غير موجود."); await users.SetLockoutEndDateAsync(u, DateTimeOffset.MaxValue); return NoContent(); }
 }
 
-[ApiController, Route("api/v1/moderators"), Authorize(Roles = "Admin")]
-public sealed class ModeratorsController(AppDbContext db) : ControllerBase { [HttpGet] public async Task<IActionResult> List(CancellationToken ct) => Ok(ApiResponse<object>.Ok(await db.Moderators.Select(x => new { x.Id, x.UserId, x.FullName, x.PhoneNumber, status = x.Status.ToString() }).ToListAsync(ct))); }
+[ApiController, Route("api/v1/moderators"), Authorize(Roles = Roles.Admin)]
+public sealed class ModeratorsController(AppDbContext db, UserManager<ApplicationUser> users, ICurrentUser current, IDateTimeProvider clock) : ControllerBase
+{
+    [HttpGet]
+    public async Task<ActionResult<ApiResponse<IReadOnlyList<ModeratorResponse>>>> List(CancellationToken ct)
+    {
+        var rows = await (from moderator in db.Moderators.AsNoTracking()
+                          join user in db.Users.AsNoTracking() on moderator.UserId equals user.Id
+                          orderby moderator.FullName
+                          select new ModeratorResponse(moderator.Id, user.UserName!, moderator.FullName, moderator.PhoneNumber, moderator.Status.ToString())).ToListAsync(ct);
+        return Ok(ApiResponse<IReadOnlyList<ModeratorResponse>>.Ok(rows));
+    }
+
+    [HttpPost]
+    public async Task<ActionResult<ApiResponse<ModeratorResponse>>> Create(CreateModeratorRequest request, CancellationToken ct)
+    {
+        await using var tx = await db.Database.BeginTransactionAsync(ct);
+        var phone = PhoneNormalizer.Normalize(request.PhoneNumber);
+        if (await db.Moderators.AnyAsync(x => x.PhoneNumber == phone, ct)) throw new AppException(409, ErrorCodes.Validation, "رقم الهاتف مستخدم بالفعل.", "phoneNumber");
+        var user = new ApplicationUser { UserName = request.UserName, DisplayName = request.FullName, PhoneNumber = phone };
+        var result = await users.CreateAsync(user, request.Password);
+        if (!result.Succeeded) throw new AppException(400, ErrorCodes.Validation, string.Join(" ", result.Errors.Select(x => x.Description)));
+        await users.AddToRoleAsync(user, Roles.Moderator);
+        var moderator = new Moderator { UserId = user.Id, FullName = request.FullName, PhoneNumber = phone };
+        db.Moderators.Add(moderator); await db.AuditAsync(current, "ModeratorCreated", nameof(Moderator), moderator.Id, null, request.FullName, ct);
+        await db.SaveChangesAsync(ct); await tx.CommitAsync(ct);
+        return StatusCode(201, ApiResponse<ModeratorResponse>.Ok(new(moderator.Id, request.UserName, moderator.FullName, moderator.PhoneNumber, moderator.Status.ToString())));
+    }
+
+    [HttpPut("{id:guid}")]
+    public async Task<ActionResult<ApiResponse<ModeratorResponse>>> Update(Guid id, UpdateModeratorRequest request, CancellationToken ct)
+    {
+        var moderator = await db.Moderators.SingleOrDefaultAsync(x => x.Id == id, ct) ?? throw new AppException(404, ErrorCodes.NotFound, "المشرف غير موجود.");
+        if (!Enum.TryParse<AccountStatus>(request.Status, true, out var status)) throw new AppException(422, ErrorCodes.Validation, "حالة الحساب غير صالحة.", "status");
+        moderator.FullName = request.FullName; moderator.PhoneNumber = PhoneNormalizer.Normalize(request.PhoneNumber); moderator.Status = status; moderator.UpdatedAt = clock.UtcNow;
+        var user = await users.FindByIdAsync(moderator.UserId) ?? throw new AppException(404, ErrorCodes.NotFound, "حساب المشرف غير موجود."); user.DisplayName = request.FullName; user.PhoneNumber = moderator.PhoneNumber;
+        await db.SaveChangesAsync(ct); return Ok(ApiResponse<ModeratorResponse>.Ok(new(moderator.Id, user.UserName!, moderator.FullName, moderator.PhoneNumber, moderator.Status.ToString())));
+    }
+
+    [HttpDelete("{id:guid}")]
+    public async Task<IActionResult> Archive(Guid id, CancellationToken ct)
+    {
+        var moderator = await db.Moderators.SingleOrDefaultAsync(x => x.Id == id, ct) ?? throw new AppException(404, ErrorCodes.NotFound, "المشرف غير موجود.");
+        moderator.IsDeleted = true; moderator.DeletedAt = clock.UtcNow; moderator.DeletedBy = current.UserId;
+        var user = await users.FindByIdAsync(moderator.UserId); if (user is not null) { user.IsDeleted = true; user.DeletedAt = clock.UtcNow; }
+        await db.SaveChangesAsync(ct); return NoContent();
+    }
+}
 
 [ApiController, Route("api/v1/partners"), Authorize(Roles = "Admin")]
 public sealed class PartnersController(AppDbContext db) : ControllerBase { [HttpGet] public async Task<IActionResult> List(CancellationToken ct) => Ok(ApiResponse<object>.Ok(await db.Partners.Select(x => new { x.Id, x.UserId, x.Name, x.ContactInformation, status = x.Status.ToString() }).ToListAsync(ct))); }
@@ -56,6 +102,75 @@ public sealed class StudentPaymentsController(AppDbContext db) : ControllerBase 
 public sealed class ProfileController(AppDbContext db, ICurrentUser current) : ControllerBase
 {
     [HttpGet("student"), Authorize(Roles = "Student")] public async Task<IActionResult> Student(CancellationToken ct) => Ok(ApiResponse<object>.Ok(await db.Students.Where(x => x.UserId == current.UserId).Select(x => new { x.Id, x.FullName, x.PhoneNumber, x.ParentName, x.ParentPhoneNumber, x.GradeLevelId, x.CurriculumId, x.SessionCreditBalance, x.ExpirationDate, status = x.Status.ToString() }).SingleAsync(ct)));
-    [HttpGet("teacher"), Authorize(Roles = "Teacher")] public async Task<IActionResult> Teacher(CancellationToken ct) => Ok(ApiResponse<object>.Ok(await db.Teachers.Where(x => x.UserId == current.UserId).Select(x => new { x.Id, x.FullName, x.PhoneNumber, x.WhatsApp, x.DefaultPerSessionRate, x.PreferredPayoutMethod, payoutDestination = PhoneNormalizer.Mask(x.EWalletNumber ?? x.InstaPayIdentifier), status = x.Status.ToString() }).SingleAsync(ct)));
-    [HttpGet("teacher/students"), Authorize(Roles = "Teacher")] public async Task<IActionResult> AssignedStudents(CancellationToken ct) { var id = await db.Teachers.Where(x => x.UserId == current.UserId).Select(x => x.Id).SingleAsync(ct); return Ok(ApiResponse<object>.Ok(await db.TeacherStudentAssignments.Where(x => x.TeacherId == id).Select(x => new { x.StudentId, x.SubjectId, studentName = db.Students.Where(s => s.Id == x.StudentId).Select(s => s.FullName).Single() }).ToListAsync(ct))); }
+    [HttpGet("teacher"), Authorize(Roles = "Teacher")] public async Task<IActionResult> Teacher(CancellationToken ct) => Ok(ApiResponse<object>.Ok(await db.Teachers.Where(x => x.UserId == current.UserId).Select(x => new { x.Id, x.FullName, x.PhoneNumber, x.WhatsApp, x.DefaultPerSessionRate, x.ZoomMeetingUrl, x.DefaultCurrency, x.PreferredPayoutMethod, payoutDestination = PhoneNormalizer.Mask(x.EWalletNumber ?? x.InstaPayIdentifier), status = x.Status.ToString() }).SingleAsync(ct)));
+    [HttpGet("teacher/students"), Authorize(Roles = "Teacher")] public async Task<IActionResult> AssignedStudents(CancellationToken ct) { var id = await db.Teachers.Where(x => x.UserId == current.UserId).Select(x => x.Id).SingleAsync(ct); return Ok(ApiResponse<object>.Ok(await db.TeacherStudentAssignments.Where(x => x.TeacherId == id).Select(x => new { x.StudentId, x.SubjectId, x.SessionPrice, x.Currency, studentName = db.Students.Where(s => s.Id == x.StudentId).Select(s => s.FullName).Single() }).ToListAsync(ct))); }
+}
+
+[ApiController, Route("api/v1/schedules"), Authorize]
+public sealed class SchedulesController(AppDbContext db, ICurrentUser current, IDateTimeProvider clock) : ControllerBase
+{
+    private static readonly string[] Themes = ["blue", "orange", "purple", "emerald", "rose"];
+
+    [HttpGet]
+    public async Task<ActionResult<ApiResponse<PageResult<WeeklyScheduleResponse>>>> List([FromQuery] PageRequest page, [FromQuery] Guid? studentId, [FromQuery] Guid? teacherId, [FromQuery] Guid? subjectId, CancellationToken ct)
+    {
+        var query = db.WeeklySchedules.AsNoTracking().AsQueryable();
+        if (User.IsInRole(Roles.Student)) { var id = await db.Students.Where(x => x.UserId == current.UserId).Select(x => x.Id).SingleAsync(ct); query = query.Where(x => x.StudentId == id); }
+        else if (User.IsInRole(Roles.Teacher)) { var id = await db.Teachers.Where(x => x.UserId == current.UserId).Select(x => x.Id).SingleAsync(ct); query = query.Where(x => x.TeacherId == id); }
+        else if (User.IsInRole(Roles.Admin) || User.IsInRole(Roles.Moderator)) { if (studentId.HasValue) query = query.Where(x => x.StudentId == studentId); if (teacherId.HasValue) query = query.Where(x => x.TeacherId == teacherId); }
+        else throw new AppException(403, ErrorCodes.Forbidden, "غير مسموح بعرض الجدول.");
+        if (subjectId.HasValue) query = query.Where(x => x.SubjectId == subjectId);
+        var number = Math.Max(1, page.PageNumber); var size = Math.Clamp(page.PageSize, 1, 100); var total = await query.CountAsync(ct);
+        var rows = await (from schedule in query
+                          join student in db.Students.AsNoTracking() on schedule.StudentId equals student.Id
+                          join teacher in db.Teachers.AsNoTracking() on schedule.TeacherId equals teacher.Id
+                          join subject in db.Subjects.AsNoTracking() on schedule.SubjectId equals subject.Id
+                          orderby schedule.DayOfWeek, schedule.StartTime
+                          select new { Schedule = schedule, StudentName = student.FullName, TeacherName = teacher.FullName, SubjectName = subject.NameAr, teacher.ZoomMeetingUrl })
+            .Skip((number - 1) * size).Take(size).ToListAsync(ct);
+        var items = rows.Select(x => Map(x.Schedule, x.StudentName, x.TeacherName, x.SubjectName, x.ZoomMeetingUrl)).ToList();
+        return Ok(ApiResponse<PageResult<WeeklyScheduleResponse>>.Ok(new(items, number, size, total)));
+    }
+
+    [HttpPost, Authorize(Policy = "AcademicOperations")]
+    public async Task<ActionResult<ApiResponse<WeeklyScheduleResponse>>> Create(WeeklyScheduleRequest request, CancellationToken ct)
+    {
+        await Validate(request, null, ct);
+        var schedule = new WeeklySchedule { StudentId = request.StudentId, TeacherId = request.TeacherId, SubjectId = request.SubjectId, DayOfWeek = request.DayOfWeek, StartTime = request.StartTime, EndTime = request.EndTime, ZoomUrl = request.ZoomUrl };
+        db.WeeklySchedules.Add(schedule); await db.SaveChangesAsync(ct); return StatusCode(201, ApiResponse<WeeklyScheduleResponse>.Ok(await BuildResponse(schedule, ct)));
+    }
+
+    [HttpPut("{id:guid}"), Authorize(Policy = "AcademicOperations")]
+    public async Task<ActionResult<ApiResponse<WeeklyScheduleResponse>>> Update(Guid id, WeeklyScheduleRequest request, CancellationToken ct)
+    {
+        var schedule = await db.WeeklySchedules.SingleOrDefaultAsync(x => x.Id == id, ct) ?? throw new AppException(404, ErrorCodes.NotFound, "موعد الجدول غير موجود."); await Validate(request, id, ct);
+        schedule.StudentId = request.StudentId; schedule.TeacherId = request.TeacherId; schedule.SubjectId = request.SubjectId; schedule.DayOfWeek = request.DayOfWeek; schedule.StartTime = request.StartTime; schedule.EndTime = request.EndTime; schedule.ZoomUrl = request.ZoomUrl; schedule.UpdatedAt = clock.UtcNow;
+        await db.SaveChangesAsync(ct); return Ok(ApiResponse<WeeklyScheduleResponse>.Ok(await BuildResponse(schedule, ct)));
+    }
+
+    [HttpDelete("{id:guid}"), Authorize(Policy = "AcademicOperations")]
+    public async Task<IActionResult> Delete(Guid id, CancellationToken ct)
+    {
+        var schedule = await db.WeeklySchedules.SingleOrDefaultAsync(x => x.Id == id, ct) ?? throw new AppException(404, ErrorCodes.NotFound, "موعد الجدول غير موجود."); schedule.IsDeleted = true; schedule.DeletedAt = clock.UtcNow; schedule.DeletedBy = current.UserId; await db.SaveChangesAsync(ct); return NoContent();
+    }
+
+    private async Task Validate(WeeklyScheduleRequest request, Guid? excludingId, CancellationToken ct)
+    {
+        if (!Enum.IsDefined(request.DayOfWeek)) throw new AppException(422, ErrorCodes.Validation, "يوم الأسبوع غير صالح.", "dayOfWeek");
+        if (request.EndTime <= request.StartTime) throw new AppException(422, ErrorCodes.Validation, "وقت النهاية يجب أن يكون بعد وقت البداية.", "endTime");
+        if (!string.IsNullOrWhiteSpace(request.ZoomUrl) && (!Uri.TryCreate(request.ZoomUrl, UriKind.Absolute, out var zoomUri) || zoomUri.Scheme is not ("http" or "https"))) throw new AppException(422, ErrorCodes.Validation, "رابط Zoom غير صالح.", "zoomUrl");
+        if (!await db.TeacherStudentAssignments.AnyAsync(x => x.StudentId == request.StudentId && x.TeacherId == request.TeacherId && x.SubjectId == request.SubjectId, ct)) throw new AppException(422, ErrorCodes.Validation, "الطالب غير مربوط بهذا المدرس والمادة.");
+        var overlap = await db.WeeklySchedules.AnyAsync(x => (!excludingId.HasValue || x.Id != excludingId.Value) && x.DayOfWeek == request.DayOfWeek && x.StartTime < request.EndTime && x.EndTime > request.StartTime && (x.StudentId == request.StudentId || x.TeacherId == request.TeacherId), ct);
+        if (overlap) throw new AppException(409, ErrorCodes.Validation, "يوجد تعارض مع موعد آخر للطالب أو المدرس.");
+    }
+
+    private async Task<WeeklyScheduleResponse> BuildResponse(WeeklySchedule schedule, CancellationToken ct)
+    {
+        var names = await (from student in db.Students.AsNoTracking() where student.Id == schedule.StudentId from teacher in db.Teachers.AsNoTracking().Where(x => x.Id == schedule.TeacherId) from subject in db.Subjects.AsNoTracking().Where(x => x.Id == schedule.SubjectId) select new { StudentName = student.FullName, TeacherName = teacher.FullName, SubjectName = subject.NameAr, teacher.ZoomMeetingUrl }).SingleAsync(ct);
+        return Map(schedule, names.StudentName, names.TeacherName, names.SubjectName, names.ZoomMeetingUrl);
+    }
+
+    private static WeeklyScheduleResponse Map(WeeklySchedule x, string student, string teacher, string subject, string? teacherZoom)
+        => new(x.Id, x.StudentId, student, x.TeacherId, teacher, x.SubjectId, subject, x.DayOfWeek, ArabicDay(x.DayOfWeek), x.StartTime, x.EndTime, x.StartTime.ToString("HH:mm"), $"{x.StartTime:HH:mm} - {x.EndTime:HH:mm}", x.StartTime.Hour < 12 ? "am" : "pm", Themes[x.SubjectId.ToByteArray()[0] % Themes.Length], x.ZoomUrl ?? teacherZoom, teacher, student, x.ZoomUrl ?? teacherZoom);
+    private static string ArabicDay(DayOfWeek day) => day switch { DayOfWeek.Saturday => "السبت", DayOfWeek.Sunday => "الأحد", DayOfWeek.Monday => "الإثنين", DayOfWeek.Tuesday => "الثلاثاء", DayOfWeek.Wednesday => "الأربعاء", DayOfWeek.Thursday => "الخميس", _ => "الجمعة" };
 }

@@ -78,8 +78,32 @@ public sealed class HomeController(AppDbContext db, ICurrentUser current, IDateT
             ? await db.Teachers.Where(x => x.UserId == current.UserId).Select(x => x.Id).SingleAsync(ct)
             : await db.Students.Where(x => x.UserId == current.UserId).Select(x => x.Id).SingleAsync(ct);
         var sessions = await LoadSessions(profileId, isTeacher, from, to, ct);
-        var items = sessions.Select(x => Map(x, clock.UtcNow, isTeacher)).ToList();
+        sessions.AddRange(await LoadWeeklyOccurrences(profileId, isTeacher, startDate, endDate, ct));
+        var items = sessions.OrderBy(x => x.ScheduledAt).Select(x => Map(x, clock.UtcNow, isTeacher)).ToList();
         return Ok(ApiResponse<HomeScheduleResponse>.Ok(new(startDate, endDate, items)));
+    }
+
+    private async Task<List<HomeSessionRow>> LoadWeeklyOccurrences(Guid profileId, bool isTeacher, DateOnly startDate, DateOnly endDate, CancellationToken ct)
+    {
+        var schedules = db.WeeklySchedules.AsNoTracking().AsQueryable();
+        schedules = isTeacher ? schedules.Where(x => x.TeacherId == profileId) : schedules.Where(x => x.StudentId == profileId);
+        var rows = await (from schedule in schedules
+                          join subject in db.Subjects.AsNoTracking() on schedule.SubjectId equals subject.Id
+                          join teacher in db.Teachers.AsNoTracking() on schedule.TeacherId equals teacher.Id
+                          join student in db.Students.AsNoTracking() on schedule.StudentId equals student.Id
+                          select new { Schedule = schedule, Subject = subject.NameAr, TeacherName = teacher.FullName, StudentName = student.FullName, teacher.ZoomMeetingUrl }).ToListAsync(ct);
+        var result = new List<HomeSessionRow>();
+        foreach (var row in rows)
+        {
+            for (var date = startDate; date <= endDate; date = date.AddDays(1))
+            {
+                if (date.DayOfWeek != row.Schedule.DayOfWeek) continue;
+                var start = AtCairo(date).Add(row.Schedule.StartTime.ToTimeSpan()).ToUniversalTime();
+                var duration = (int)(row.Schedule.EndTime - row.Schedule.StartTime).TotalMinutes;
+                result.Add(new(row.Schedule.Id, row.Schedule.SubjectId, row.Subject, row.TeacherName, row.StudentName, start, duration, row.Schedule.ZoomUrl ?? row.ZoomMeetingUrl, SessionStatus.Scheduled));
+            }
+        }
+        return result;
     }
 
     private async Task<List<HomeSessionRow>> LoadSessions(Guid profileId, bool isTeacher, DateTimeOffset rangeStart, DateTimeOffset rangeEnd, CancellationToken ct)
