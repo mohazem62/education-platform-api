@@ -79,7 +79,7 @@ public sealed record SubmissionRequest(string? TextAnswer, bool Submit);
 public sealed record GradeRequest(decimal Grade, string? Feedback);
 public sealed record TeacherAssignmentOverviewResponse(Guid SubjectId, string SubjectName, int TotalAssignments, int ExpectedSubmissions, int SubmittedCount, int PendingGradingCount, int GradedCount, int NotSubmittedCount, decimal SubmissionPercentage);
 public sealed record TeacherSubmissionRowResponse(Guid AssignmentId, Guid? SubmissionId, Guid StudentId, string StudentName, string GradeLevelName, Guid SubjectId, string SubjectName, string AssignmentTitle, decimal MaxGrade, string Status, DateTimeOffset? SubmittedAt, decimal? Grade, string? Feedback);
-public sealed record HomeClassItemResponse(Guid Id, string Subject, string? Teacher, string Name, string Day, string TimeSlot, string TimeRange, string Period, string ColorTheme, string? ZoomUrl, DateTimeOffset ScheduledAt, int DurationMinutes, string Status, bool IsLive);
+public sealed record HomeClassItemResponse(Guid Id, string Subject, string? Teacher, string Name, string Day, string TimeSlot, string TimeRange, string Period, string ColorTheme, string? ZoomUrl, DateTimeOffset ScheduledAt, int DurationMinutes, string Status, bool IsLive, string? StudentName = null, string? TeacherName = null);
 public sealed record HomeMonthlySessionsResponse(int Attended, int Total, string Month);
 public sealed record HomeCardsResponse(string Role, decimal AverageGradePercentage, int RegisteredSubjects, HomeMonthlySessionsResponse Sessions, HomeClassItemResponse? CurrentSession);
 public sealed record HomeScheduleResponse(DateOnly WeekStart, DateOnly WeekEnd, IReadOnlyList<HomeClassItemResponse> Items);

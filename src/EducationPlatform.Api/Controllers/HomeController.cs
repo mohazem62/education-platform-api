@@ -83,9 +83,18 @@ public sealed class HomeController(AppDbContext db, ICurrentUser current, IDateT
     {
         var isTeacher = User.IsInRole(Roles.Teacher);
         var isStudent = User.IsInRole(Roles.Student);
-        if (!isTeacher && !isStudent) throw new AppException(403, ErrorCodes.Forbidden, "This endpoint is available to teachers and students only.");
+        var isModerator = User.IsInRole(Roles.Moderator);
+        if (!isTeacher && !isStudent && !isModerator) throw new AppException(403, ErrorCodes.Forbidden, "هذا المسار متاح للطالب والمعلم والمشرف فقط.");
 
         var localToday = DateOnly.FromDateTime(TimeZoneInfo.ConvertTime(clock.UtcNow, CairoTimeZone).DateTime);
+        if (isModerator)
+        {
+            var selectedDate = weekStart ?? localToday;
+            var dailySessions = await LoadAllSessions(AtCairo(selectedDate), AtCairo(selectedDate.AddDays(1)), ct);
+            var dailyItems = dailySessions.OrderBy(x => x.ScheduledAt).Select(x => MapModerator(x, clock.UtcNow)).ToList();
+            return Ok(ApiResponse<HomeScheduleResponse>.Ok(new(selectedDate, selectedDate, dailyItems)));
+        }
+
         var startDate = weekStart ?? localToday.AddDays(-(((int)localToday.DayOfWeek - (int)DayOfWeek.Saturday + 7) % 7));
         var endDate = startDate.AddDays(6);
         var from = AtCairo(startDate);
@@ -139,7 +148,8 @@ public sealed class HomeController(AppDbContext db, ICurrentUser current, IDateT
         return new(row.Id, row.Subject, isTeacher ? null : row.TeacherName, oppositeName, ArabicDay(local.DayOfWeek),
             local.ToString("HH:mm"), $"{local:HH:mm} - {end:HH:mm}", local.Hour < 12 ? "am" : "pm",
             Themes[row.SubjectId.ToByteArray()[0] % Themes.Length], row.ClassLink, row.ScheduledAt, row.DurationMinutes,
-            row.Status.ToString(), row.ScheduledAt <= now && row.ScheduledAt.AddMinutes(row.DurationMinutes) > now);
+            row.Status.ToString(), row.ScheduledAt <= now && row.ScheduledAt.AddMinutes(row.DurationMinutes) > now,
+            row.StudentName, row.TeacherName);
     }
 
     private static HomeClassItemResponse MapModerator(HomeSessionRow row, DateTimeOffset now)
@@ -149,7 +159,8 @@ public sealed class HomeController(AppDbContext db, ICurrentUser current, IDateT
         return new(row.Id, row.Subject, row.TeacherName, row.StudentName, ArabicDay(local.DayOfWeek),
             local.ToString("HH:mm"), $"{local:HH:mm} - {end:HH:mm}", local.Hour < 12 ? "am" : "pm",
             Themes[row.SubjectId.ToByteArray()[0] % Themes.Length], row.ClassLink, row.ScheduledAt, row.DurationMinutes,
-            row.Status.ToString(), row.ScheduledAt <= now && row.ScheduledAt.AddMinutes(row.DurationMinutes) > now);
+            row.Status.ToString(), row.ScheduledAt <= now && row.ScheduledAt.AddMinutes(row.DurationMinutes) > now,
+            row.StudentName, row.TeacherName);
     }
 
     private static DateTimeOffset AtCairo(DateOnly date)
