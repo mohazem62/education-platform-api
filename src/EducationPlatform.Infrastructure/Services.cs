@@ -180,6 +180,7 @@ public sealed class SessionService(AppDbContext db, ICurrentUser current, IDateT
         var pricing = await Pricing(r.StudentId, r.TeacherId, r.SubjectId, ct);
         var x = new ClassSession();
         Apply(x, r.StudentId, r.TeacherId, r.SubjectId, r.ScheduledAt, r.DurationMinutes, r.ClassLink, r.StudentCreditCost, r.RecurrenceType, r.RecurrenceEndDate, pricing);
+        await EnsureNoScheduleConflict(x, ct);
         db.Sessions.Add(x); await db.AuditAsync(current, "SessionCreated", nameof(ClassSession), x.Id, null, r.RecurrenceType.ToString(), ct); await db.SaveChangesAsync(ct); return Map(x);
     }
     public async Task<SessionResponse> UpdateAsync(Guid id, UpdateSessionRequest r, CancellationToken ct)
@@ -189,6 +190,7 @@ public sealed class SessionService(AppDbContext db, ICurrentUser current, IDateT
         var pricing = await Pricing(r.StudentId, r.TeacherId, r.SubjectId, ct);
         var before = $"{x.ScheduledAt:O}|{x.RecurrenceType}";
         Apply(x, r.StudentId, r.TeacherId, r.SubjectId, r.ScheduledAt, r.DurationMinutes, r.ClassLink, r.StudentCreditCost, r.RecurrenceType, r.RecurrenceEndDate, pricing);
+        await EnsureNoScheduleConflict(x, ct);
         x.UpdatedAt = clock.UtcNow; await db.AuditAsync(current, "SessionUpdated", nameof(ClassSession), x.Id, before, $"{x.ScheduledAt:O}|{x.RecurrenceType}", ct); await db.SaveChangesAsync(ct); return Map(x);
     }
     public async Task DeleteAsync(Guid id, CancellationToken ct)
@@ -241,6 +243,35 @@ public sealed class SessionService(AppDbContext db, ICurrentUser current, IDateT
     private static void Apply(ClassSession x, Guid studentId, Guid teacherId, Guid subjectId, DateTimeOffset scheduledAt, int durationMinutes, string? classLink, int studentCreditCost, SessionRecurrenceType recurrenceType, DateTimeOffset? recurrenceEndDate, SessionPricing pricing)
     {
         x.StudentId = studentId; x.TeacherId = teacherId; x.SubjectId = subjectId; x.ScheduledAt = scheduledAt.ToUniversalTime(); x.DurationMinutes = durationMinutes; x.ClassLink = classLink; x.StudentCreditCost = studentCreditCost; x.RecurrenceType = recurrenceType; x.RecurrenceEndDate = recurrenceType == SessionRecurrenceType.Once ? null : recurrenceEndDate?.ToUniversalTime(); x.TeacherRateSnapshot = pricing.TeacherRate; x.TeacherRateCurrencySnapshot = pricing.TeacherCurrency; x.StudentPriceSnapshot = pricing.StudentPrice; x.StudentPriceCurrencySnapshot = pricing.StudentCurrency;
+    }
+    private async Task EnsureNoScheduleConflict(ClassSession requested, CancellationToken ct)
+    {
+        var existingSessions = await db.Sessions.AsNoTracking()
+            .Where(x => x.Id != requested.Id &&
+                        (x.StudentId == requested.StudentId || x.TeacherId == requested.TeacherId) &&
+                        x.Status != SessionStatus.Cancelled && x.Status != SessionStatus.Rejected)
+            .ToListAsync(ct);
+
+        foreach (var existing in existingSessions.Where(x => x.StudentId == requested.StudentId))
+        {
+            var conflict = SessionConflictDetector.Find(requested, existing);
+            if (conflict is not null)
+                throw ConflictError(ErrorCodes.StudentSessionConflict, "الطالب", "scheduledAt", existing, conflict);
+        }
+
+        foreach (var existing in existingSessions.Where(x => x.TeacherId == requested.TeacherId))
+        {
+            var conflict = SessionConflictDetector.Find(requested, existing);
+            if (conflict is not null)
+                throw ConflictError(ErrorCodes.TeacherSessionConflict, "المعلم", "scheduledAt", existing, conflict);
+        }
+    }
+    private static AppException ConflictError(string code, string owner, string field, ClassSession existing, SessionTimeConflict conflict)
+    {
+        var start = conflict.ExistingOccurrence.ToString("yyyy-MM-dd HH:mm 'UTC'");
+        var end = conflict.ExistingOccurrence.AddMinutes(existing.DurationMinutes).ToString("HH:mm 'UTC'");
+        return new AppException(409, code,
+            $"يوجد تعارض في الموعد: {owner} لديه حصة أخرى من {start} إلى {end} (sessionId: {existing.Id}). غيّر scheduledAt أو durationMinutes.", field);
     }
     private static SessionResponse Map(ClassSession x) => new(x.Id, x.StudentId, x.TeacherId, x.SubjectId, x.ScheduledAt, x.DurationMinutes, x.ClassLink, x.Status.ToString(), x.AttendanceStatus?.ToString(), x.TeacherRateSnapshot, x.StudentCreditCost, x.TeacherRateCurrencySnapshot, x.StudentPriceSnapshot, x.StudentPriceCurrencySnapshot, x.RecurrenceType, x.RecurrenceEndDate);
     private sealed record SessionPricing(decimal TeacherRate, string TeacherCurrency, decimal StudentPrice, string StudentCurrency);

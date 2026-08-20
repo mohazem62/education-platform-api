@@ -13,6 +13,8 @@ public static class ErrorCodes
     public const string StudentNotFound = "STUDENT_NOT_FOUND";
     public const string TeacherNotFound = "TEACHER_NOT_FOUND";
     public const string SessionNotFound = "SESSION_NOT_FOUND";
+    public const string StudentSessionConflict = "STUDENT_SESSION_CONFLICT";
+    public const string TeacherSessionConflict = "TEACHER_SESSION_CONFLICT";
     public const string InsufficientBalance = "INSUFFICIENT_SESSION_BALANCE";
     public const string AttendanceConfirmed = "ATTENDANCE_ALREADY_CONFIRMED";
     public const string FinancialPeriodClosed = "FINANCIAL_PERIOD_CLOSED";
