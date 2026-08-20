@@ -120,7 +120,12 @@ public sealed class SchedulesController(AppDbContext db, ICurrentUser current, I
         var from = AtCairo(startDate); var to = AtCairo(startDate.AddDays(7));
         var query = db.Sessions.AsNoTracking().Where(x => x.ScheduledAt < to &&
             (x.RecurrenceType == SessionRecurrenceType.Once ? x.ScheduledAt >= from : x.RecurrenceEndDate == null || x.RecurrenceEndDate >= from));
-        if (User.IsInRole(Roles.Student)) { var id = await db.Students.Where(x => x.UserId == current.UserId).Select(x => x.Id).SingleAsync(ct); query = query.Where(x => x.StudentId == id); }
+        if (User.IsInRole(Roles.Student))
+        {
+            var student = await db.Students.Where(x => x.UserId == current.UserId)
+                .Select(x => new { x.Id, x.SessionCreditBalance }).SingleAsync(ct);
+            query = query.Where(x => x.StudentId == student.Id && x.StudentCreditCost <= student.SessionCreditBalance);
+        }
         else if (User.IsInRole(Roles.Teacher)) { var id = await db.Teachers.Where(x => x.UserId == current.UserId).Select(x => x.Id).SingleAsync(ct); query = query.Where(x => x.TeacherId == id); }
         else { if (studentId.HasValue) query = query.Where(x => x.StudentId == studentId); if (teacherId.HasValue) query = query.Where(x => x.TeacherId == teacherId); }
         if (subjectId.HasValue) query = query.Where(x => x.SubjectId == subjectId);

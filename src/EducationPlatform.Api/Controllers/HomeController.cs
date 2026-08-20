@@ -85,7 +85,13 @@ public sealed class HomeController(AppDbContext db, ICurrentUser current, IDateT
     {
         var sessionQuery = db.Sessions.AsNoTracking().Where(x => x.ScheduledAt < rangeEnd &&
             (x.RecurrenceType == SessionRecurrenceType.Once ? x.ScheduledAt >= rangeStart : x.RecurrenceEndDate == null || x.RecurrenceEndDate >= rangeStart));
-        sessionQuery = isTeacher ? sessionQuery.Where(x => x.TeacherId == profileId) : sessionQuery.Where(x => x.StudentId == profileId);
+        if (isTeacher)
+            sessionQuery = sessionQuery.Where(x => x.TeacherId == profileId);
+        else
+        {
+            var balance = await db.Students.Where(x => x.Id == profileId).Select(x => x.SessionCreditBalance).SingleAsync(ct);
+            sessionQuery = sessionQuery.Where(x => x.StudentId == profileId && x.StudentCreditCost <= balance);
+        }
         var rows = await (from session in sessionQuery
                           join subject in db.Subjects.AsNoTracking() on session.SubjectId equals subject.Id
                           join teacher in db.Teachers.AsNoTracking() on session.TeacherId equals teacher.Id

@@ -205,13 +205,20 @@ public sealed class SessionService(AppDbContext db, ICurrentUser current, IDateT
     {
         var q = db.Sessions.AsNoTracking();
         var teacherId = await db.Teachers.Where(x => x.UserId == current.UserId).Select(x => (Guid?)x.Id).SingleOrDefaultAsync(ct); if (teacherId.HasValue) q = q.Where(x => x.TeacherId == teacherId);
-        var studentId = await db.Students.Where(x => x.UserId == current.UserId).Select(x => (Guid?)x.Id).SingleOrDefaultAsync(ct); if (studentId.HasValue) q = q.Where(x => x.StudentId == studentId);
+        var student = await db.Students.Where(x => x.UserId == current.UserId)
+            .Select(x => new { Id = (Guid?)x.Id, x.SessionCreditBalance }).SingleOrDefaultAsync(ct);
+        if (student?.Id.HasValue == true)
+            q = q.Where(x => x.StudentId == student.Id && x.StudentCreditCost <= student.SessionCreditBalance);
         var n = Math.Max(1, p.PageNumber); var z = Math.Clamp(p.PageSize, 1, 100); var count = await q.CountAsync(ct); var rows = await q.OrderByDescending(x => x.ScheduledAt).Skip((n - 1) * z).Take(z).Select(x => Map(x)).ToListAsync(ct); return new(rows, n, z, count);
     }
     public async Task RequestAttendanceAsync(AttendanceRequestDto r, CancellationToken ct)
     {
-        var studentId = await db.Students.Where(x => x.UserId == current.UserId).Select(x => (Guid?)x.Id).SingleOrDefaultAsync(ct) ?? throw new AppException(403, ErrorCodes.Forbidden, "غير مسموح بهذا المورد.");
-        var session = await db.Sessions.SingleOrDefaultAsync(x => x.Id == r.SessionId && x.StudentId == studentId, ct) ?? throw new AppException(404, ErrorCodes.SessionNotFound, "الجلسة غير موجودة.");
+        var student = await db.Students.SingleOrDefaultAsync(x => x.UserId == current.UserId, ct) ?? throw new AppException(403, ErrorCodes.Forbidden, "غير مسموح بهذا المورد.");
+        var session = await db.Sessions.SingleOrDefaultAsync(x => x.Id == r.SessionId && x.StudentId == student.Id, ct) ?? throw new AppException(404, ErrorCodes.SessionNotFound, "الجلسة غير موجودة.");
+        if (!CreditRules.CanAttend(student.SessionCreditBalance, session.StudentCreditCost))
+            throw new AppException(409, ErrorCodes.InsufficientBalance,
+                $"لا يمكن طلب حضور هذه الحصة لأن رصيد الطالب ({student.SessionCreditBalance}) أقل من تكلفة الحصة ({session.StudentCreditCost}). اشحن الرصيد أولًا.",
+                "sessionCreditBalance");
         if (await db.AttendanceRecords.AnyAsync(x => x.SessionId == r.SessionId, ct)) throw new AppException(409, ErrorCodes.Validation, "تم إنشاء طلب حضور لهذه الجلسة بالفعل.");
         session.Status = SessionStatus.AttendancePending; session.AttendanceStatus = AttendanceStatus.Pending;
         db.AttendanceRecords.Add(new AttendanceRecord { SessionId = session.Id, StudentId = session.StudentId, TeacherId = session.TeacherId, RequestedAt = clock.UtcNow, Notes = r.Notes }); await db.SaveChangesAsync(ct);
@@ -323,7 +330,7 @@ public sealed class DashboardService(AppDbContext db, ICurrentUser current, IDat
         return new { activeStudents = await db.Students.CountAsync(x => x.Status == AccountStatus.Active, ct), activeTeachers = await db.Teachers.CountAsync(x => x.Status == AccountStatus.Active, ct), sessionsToday = await db.Sessions.CountAsync(x => x.ScheduledAt.Date == clock.UtcNow.Date, ct), pendingAttendance = await db.AttendanceRecords.CountAsync(x => x.Status == AttendanceStatus.Pending, ct), expiringStudents = await db.Students.CountAsync(x => x.ExpirationDate >= clock.UtcNow && x.ExpirationDate <= clock.UtcNow.AddDays(7), ct), pendingPayouts = await db.TeacherPayouts.CountAsync(x => x.Status == PayoutStatus.PendingReview, ct), revenue, teacherCosts = costs, operatingExpenses = expenses, netProfit = FinancialCalculator.NetProfit(revenue, costs, expenses) };
     }
     public async Task<object> TeacherAsync(CancellationToken ct) { var id = await db.Teachers.Where(x => x.UserId == current.UserId).Select(x => x.Id).SingleAsync(ct); return new { assignedStudents = await db.TeacherStudentAssignments.CountAsync(x => x.TeacherId == id, ct), upcomingSessions = await db.Sessions.CountAsync(x => x.TeacherId == id && x.ScheduledAt > clock.UtcNow, ct), pendingSubmissions = await db.AssignmentSubmissions.CountAsync(x => (x.Status == SubmissionStatus.Submitted || x.Status == SubmissionStatus.Late) && db.Assignments.Any(a => a.Id == x.AssignmentId && a.TeacherId == id), ct), currentPayout = await db.TeacherPayouts.Where(x => x.TeacherId == id).OrderByDescending(x => x.CreatedAt).Select(x => (decimal?)x.FinalAmount).FirstOrDefaultAsync(ct) }; }
-    public async Task<object> StudentAsync(CancellationToken ct) { var s = await db.Students.SingleAsync(x => x.UserId == current.UserId, ct); return new { remainingSessions = s.SessionCreditBalance, expirationDate = s.ExpirationDate, upcomingSessions = await db.Sessions.CountAsync(x => x.StudentId == s.Id && x.ScheduledAt > clock.UtcNow, ct), pendingAssignments = await db.AssignmentTargets.CountAsync(x => x.StudentId == s.Id && !db.AssignmentSubmissions.Any(y => y.AssignmentId == x.AssignmentId && y.StudentId == s.Id && y.Status != SubmissionStatus.Draft), ct) }; }
+    public async Task<object> StudentAsync(CancellationToken ct) { var s = await db.Students.SingleAsync(x => x.UserId == current.UserId, ct); return new { remainingSessions = s.SessionCreditBalance, expirationDate = s.ExpirationDate, upcomingSessions = await db.Sessions.CountAsync(x => x.StudentId == s.Id && x.ScheduledAt > clock.UtcNow && x.StudentCreditCost <= s.SessionCreditBalance, ct), pendingAssignments = await db.AssignmentTargets.CountAsync(x => x.StudentId == s.Id && !db.AssignmentSubmissions.Any(y => y.AssignmentId == x.AssignmentId && y.StudentId == s.Id && y.Status != SubmissionStatus.Draft), ct) }; }
     public async Task<object> PartnerAsync(CancellationToken ct) { var id = await db.Partners.Where(x => x.UserId == current.UserId).Select(x => x.Id).SingleAsync(ct); return await db.PartnerDividends.Where(x => x.PartnerId == id).OrderByDescending(x => x.CreatedAt).Select(x => new { x.FinancialPeriodId, x.SharePercentageSnapshot, x.NetProfitSnapshot, x.DividendAmount, status = x.Status.ToString() }).ToListAsync(ct); }
 }
 

@@ -155,6 +155,8 @@ public static class FinancialCalculator
 
 public static class CreditRules
 {
+    public static bool CanAttend(int currentBalance, int cost) => cost > 0 && currentBalance >= cost;
+
     public static (int Before, int After) Deduct(int currentBalance, int cost)
     {
         if (cost <= 0) throw new DomainException("INVALID_SESSION_CREDIT_COST", "تكلفة الجلسة غير صالحة.");
