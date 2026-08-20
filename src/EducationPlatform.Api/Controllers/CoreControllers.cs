@@ -54,11 +54,13 @@ public sealed class CatalogController(ICatalogService service) : ControllerBase
     [HttpPost("grade-levels"), Authorize(Policy = "AcademicOperations")] public async Task<IActionResult> Grade(LookupRequest request, CancellationToken ct) => StatusCode(201, ApiResponse<LookupResponse>.Ok(await service.CreateGradeAsync(request, ct)));
 }
 
-[ApiController, Route("api/v1/sessions"), Authorize]
+[ApiController, Route("api/v1/sessions"), Authorize(Roles = "Admin,Moderator,Teacher,Student")]
 public sealed class SessionsController(ISessionService service) : ControllerBase
 {
     [HttpGet] public async Task<IActionResult> Search([FromQuery] PageRequest page, CancellationToken ct) => Ok(ApiResponse<PageResult<SessionResponse>>.Ok(await service.SearchAsync(page, ct)));
     [HttpPost, Authorize(Policy = "AcademicOperations")] public async Task<IActionResult> Create(CreateSessionRequest request, CancellationToken ct) => StatusCode(201, ApiResponse<SessionResponse>.Ok(await service.CreateAsync(request, ct)));
+    [HttpPut("{id:guid}"), Authorize(Policy = "AcademicOperations")] public async Task<IActionResult> Update(Guid id, UpdateSessionRequest request, CancellationToken ct) => Ok(ApiResponse<SessionResponse>.Ok(await service.UpdateAsync(id, request, ct)));
+    [HttpDelete("{id:guid}"), Authorize(Policy = "AcademicOperations")] public async Task<IActionResult> Delete(Guid id, CancellationToken ct) { await service.DeleteAsync(id, ct); return NoContent(); }
 }
 
 [ApiController, Route("api/v1/attendance"), Authorize]

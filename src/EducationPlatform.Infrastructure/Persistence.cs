@@ -74,6 +74,7 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options) : Ident
         b.Entity<Curriculum>().HasIndex(x => x.Code).IsUnique(); b.Entity<Curriculum>().HasQueryFilter(x => !x.IsDeleted);
         b.Entity<GradeLevel>().HasQueryFilter(x => !x.IsDeleted);
         b.Entity<TeacherStudentAssignment>().HasQueryFilter(x => !x.IsDeleted);
+        b.Entity<ClassSession>().HasQueryFilter(x => !x.IsDeleted);
         b.Entity<WeeklySchedule>().HasQueryFilter(x => !x.IsDeleted);
         b.Entity<LessonMaterial>().HasQueryFilter(x => !x.IsDeleted);
         b.Entity<Assignment>().HasQueryFilter(x => !x.IsDeleted);

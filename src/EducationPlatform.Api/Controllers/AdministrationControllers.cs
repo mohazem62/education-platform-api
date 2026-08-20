@@ -102,75 +102,48 @@ public sealed class StudentPaymentsController(AppDbContext db) : ControllerBase 
 public sealed class ProfileController(AppDbContext db, ICurrentUser current) : ControllerBase
 {
     [HttpGet("student"), Authorize(Roles = "Student")] public async Task<IActionResult> Student(CancellationToken ct) => Ok(ApiResponse<object>.Ok(await db.Students.Where(x => x.UserId == current.UserId).Select(x => new { x.Id, x.FullName, x.PhoneNumber, x.ParentName, x.ParentPhoneNumber, x.GradeLevelId, x.CurriculumId, x.SessionCreditBalance, x.ExpirationDate, status = x.Status.ToString() }).SingleAsync(ct)));
-    [HttpGet("teacher"), Authorize(Roles = "Teacher")] public async Task<IActionResult> Teacher(CancellationToken ct) => Ok(ApiResponse<object>.Ok(await db.Teachers.Where(x => x.UserId == current.UserId).Select(x => new { x.Id, x.FullName, x.PhoneNumber, x.WhatsApp, x.DefaultPerSessionRate, x.ZoomMeetingUrl, x.DefaultCurrency, x.PreferredPayoutMethod, payoutDestination = PhoneNormalizer.Mask(x.EWalletNumber ?? x.InstaPayIdentifier), status = x.Status.ToString() }).SingleAsync(ct)));
+    [HttpGet("teacher"), Authorize(Roles = "Teacher")] public async Task<IActionResult> Teacher(CancellationToken ct) => Ok(ApiResponse<object>.Ok(await db.Teachers.Where(x => x.UserId == current.UserId).Select(x => new { x.Id, x.FullName, x.PhoneNumber, x.WhatsApp, x.DefaultPerSessionRate, x.DefaultCurrency, x.PreferredPayoutMethod, payoutDestination = PhoneNormalizer.Mask(x.EWalletNumber ?? x.InstaPayIdentifier), status = x.Status.ToString() }).SingleAsync(ct)));
     [HttpGet("teacher/students"), Authorize(Roles = "Teacher")] public async Task<IActionResult> AssignedStudents(CancellationToken ct) { var id = await db.Teachers.Where(x => x.UserId == current.UserId).Select(x => x.Id).SingleAsync(ct); return Ok(ApiResponse<object>.Ok(await db.TeacherStudentAssignments.Where(x => x.TeacherId == id).Select(x => new { x.StudentId, x.SubjectId, x.SessionPrice, x.Currency, studentName = db.Students.Where(s => s.Id == x.StudentId).Select(s => s.FullName).Single() }).ToListAsync(ct))); }
 }
 
-[ApiController, Route("api/v1/schedules"), Authorize]
+[ApiController, Route("api/v1/schedules"), Authorize(Roles = "Admin,Moderator,Teacher,Student")]
 public sealed class SchedulesController(AppDbContext db, ICurrentUser current, IDateTimeProvider clock) : ControllerBase
 {
     private static readonly string[] Themes = ["blue", "orange", "purple", "emerald", "rose"];
+    private static readonly TimeZoneInfo CairoTimeZone = FindCairoTimeZone();
 
     [HttpGet]
-    public async Task<ActionResult<ApiResponse<PageResult<WeeklyScheduleResponse>>>> List([FromQuery] PageRequest page, [FromQuery] Guid? studentId, [FromQuery] Guid? teacherId, [FromQuery] Guid? subjectId, CancellationToken ct)
+    public async Task<ActionResult<ApiResponse<PageResult<WeeklyScheduleResponse>>>> List([FromQuery] PageRequest page, [FromQuery] DateOnly? weekStart, [FromQuery] Guid? studentId, [FromQuery] Guid? teacherId, [FromQuery] Guid? subjectId, CancellationToken ct)
     {
-        var query = db.WeeklySchedules.AsNoTracking().AsQueryable();
+        var localToday = DateOnly.FromDateTime(TimeZoneInfo.ConvertTime(clock.UtcNow, CairoTimeZone).DateTime);
+        var startDate = weekStart ?? localToday.AddDays(-(((int)localToday.DayOfWeek - (int)DayOfWeek.Saturday + 7) % 7));
+        var from = AtCairo(startDate); var to = AtCairo(startDate.AddDays(7));
+        var query = db.Sessions.AsNoTracking().Where(x => x.ScheduledAt < to &&
+            (x.RecurrenceType == SessionRecurrenceType.Once ? x.ScheduledAt >= from : x.RecurrenceEndDate == null || x.RecurrenceEndDate >= from));
         if (User.IsInRole(Roles.Student)) { var id = await db.Students.Where(x => x.UserId == current.UserId).Select(x => x.Id).SingleAsync(ct); query = query.Where(x => x.StudentId == id); }
         else if (User.IsInRole(Roles.Teacher)) { var id = await db.Teachers.Where(x => x.UserId == current.UserId).Select(x => x.Id).SingleAsync(ct); query = query.Where(x => x.TeacherId == id); }
-        else if (User.IsInRole(Roles.Admin) || User.IsInRole(Roles.Moderator)) { if (studentId.HasValue) query = query.Where(x => x.StudentId == studentId); if (teacherId.HasValue) query = query.Where(x => x.TeacherId == teacherId); }
-        else throw new AppException(403, ErrorCodes.Forbidden, "غير مسموح بعرض الجدول.");
+        else { if (studentId.HasValue) query = query.Where(x => x.StudentId == studentId); if (teacherId.HasValue) query = query.Where(x => x.TeacherId == teacherId); }
         if (subjectId.HasValue) query = query.Where(x => x.SubjectId == subjectId);
-        var number = Math.Max(1, page.PageNumber); var size = Math.Clamp(page.PageSize, 1, 100); var total = await query.CountAsync(ct);
-        var rows = await (from schedule in query
-                          join student in db.Students.AsNoTracking() on schedule.StudentId equals student.Id
-                          join teacher in db.Teachers.AsNoTracking() on schedule.TeacherId equals teacher.Id
-                          join subject in db.Subjects.AsNoTracking() on schedule.SubjectId equals subject.Id
-                          orderby schedule.DayOfWeek, schedule.StartTime
-                          select new { Schedule = schedule, StudentName = student.FullName, TeacherName = teacher.FullName, SubjectName = subject.NameAr, teacher.ZoomMeetingUrl })
-            .Skip((number - 1) * size).Take(size).ToListAsync(ct);
-        var items = rows.Select(x => Map(x.Schedule, x.StudentName, x.TeacherName, x.SubjectName, x.ZoomMeetingUrl)).ToList();
-        return Ok(ApiResponse<PageResult<WeeklyScheduleResponse>>.Ok(new(items, number, size, total)));
+        var rows = await (from session in query
+                          join student in db.Students.AsNoTracking() on session.StudentId equals student.Id
+                          join teacher in db.Teachers.AsNoTracking() on session.TeacherId equals teacher.Id
+                          join subject in db.Subjects.AsNoTracking() on session.SubjectId equals subject.Id
+                          select new { Session = session, StudentName = student.FullName, TeacherName = teacher.FullName, SubjectName = subject.NameAr }).ToListAsync(ct);
+        var occurrences = rows.SelectMany(row => SessionRecurrence.Expand(row.Session, from, to)
+            .Select(at => Map(row.Session, row.StudentName, row.TeacherName, row.SubjectName, at))).OrderBy(x => x.OccurrenceAt).ToList();
+        var number = Math.Max(1, page.PageNumber); var size = Math.Clamp(page.PageSize, 1, 100); var total = occurrences.Count;
+        return Ok(ApiResponse<PageResult<WeeklyScheduleResponse>>.Ok(new(occurrences.Skip((number - 1) * size).Take(size).ToList(), number, size, total)));
     }
 
-    [HttpPost, Authorize(Policy = "AcademicOperations")]
-    public async Task<ActionResult<ApiResponse<WeeklyScheduleResponse>>> Create(WeeklyScheduleRequest request, CancellationToken ct)
+    private static WeeklyScheduleResponse Map(ClassSession x, string student, string teacher, string subject, DateTimeOffset occurrenceAt)
     {
-        await Validate(request, null, ct);
-        var schedule = new WeeklySchedule { StudentId = request.StudentId, TeacherId = request.TeacherId, SubjectId = request.SubjectId, DayOfWeek = request.DayOfWeek, StartTime = request.StartTime, EndTime = request.EndTime, ZoomUrl = request.ZoomUrl };
-        db.WeeklySchedules.Add(schedule); await db.SaveChangesAsync(ct); return StatusCode(201, ApiResponse<WeeklyScheduleResponse>.Ok(await BuildResponse(schedule, ct)));
+        var local = TimeZoneInfo.ConvertTime(occurrenceAt, CairoTimeZone); var end = local.AddMinutes(x.DurationMinutes);
+        var startTime = TimeOnly.FromDateTime(local.DateTime); var endTime = TimeOnly.FromDateTime(end.DateTime);
+        return new(x.Id, x.StudentId, student, x.TeacherId, teacher, x.SubjectId, subject, local.DayOfWeek, ArabicDay(local.DayOfWeek), startTime, endTime,
+            local.ToString("HH:mm"), $"{local:HH:mm} - {end:HH:mm}", local.Hour < 12 ? "am" : "pm", Themes[x.SubjectId.ToByteArray()[0] % Themes.Length],
+            x.ClassLink, teacher, student, x.ClassLink, x.RecurrenceType, x.RecurrenceEndDate, occurrenceAt);
     }
-
-    [HttpPut("{id:guid}"), Authorize(Policy = "AcademicOperations")]
-    public async Task<ActionResult<ApiResponse<WeeklyScheduleResponse>>> Update(Guid id, WeeklyScheduleRequest request, CancellationToken ct)
-    {
-        var schedule = await db.WeeklySchedules.SingleOrDefaultAsync(x => x.Id == id, ct) ?? throw new AppException(404, ErrorCodes.NotFound, "موعد الجدول غير موجود."); await Validate(request, id, ct);
-        schedule.StudentId = request.StudentId; schedule.TeacherId = request.TeacherId; schedule.SubjectId = request.SubjectId; schedule.DayOfWeek = request.DayOfWeek; schedule.StartTime = request.StartTime; schedule.EndTime = request.EndTime; schedule.ZoomUrl = request.ZoomUrl; schedule.UpdatedAt = clock.UtcNow;
-        await db.SaveChangesAsync(ct); return Ok(ApiResponse<WeeklyScheduleResponse>.Ok(await BuildResponse(schedule, ct)));
-    }
-
-    [HttpDelete("{id:guid}"), Authorize(Policy = "AcademicOperations")]
-    public async Task<IActionResult> Delete(Guid id, CancellationToken ct)
-    {
-        var schedule = await db.WeeklySchedules.SingleOrDefaultAsync(x => x.Id == id, ct) ?? throw new AppException(404, ErrorCodes.NotFound, "موعد الجدول غير موجود."); schedule.IsDeleted = true; schedule.DeletedAt = clock.UtcNow; schedule.DeletedBy = current.UserId; await db.SaveChangesAsync(ct); return NoContent();
-    }
-
-    private async Task Validate(WeeklyScheduleRequest request, Guid? excludingId, CancellationToken ct)
-    {
-        if (!Enum.IsDefined(request.DayOfWeek)) throw new AppException(422, ErrorCodes.Validation, "يوم الأسبوع غير صالح.", "dayOfWeek");
-        if (request.EndTime <= request.StartTime) throw new AppException(422, ErrorCodes.Validation, "وقت النهاية يجب أن يكون بعد وقت البداية.", "endTime");
-        if (!string.IsNullOrWhiteSpace(request.ZoomUrl) && (!Uri.TryCreate(request.ZoomUrl, UriKind.Absolute, out var zoomUri) || zoomUri.Scheme is not ("http" or "https"))) throw new AppException(422, ErrorCodes.Validation, "رابط Zoom غير صالح.", "zoomUrl");
-        if (!await db.TeacherStudentAssignments.AnyAsync(x => x.StudentId == request.StudentId && x.TeacherId == request.TeacherId && x.SubjectId == request.SubjectId, ct)) throw new AppException(422, ErrorCodes.Validation, "الطالب غير مربوط بهذا المدرس والمادة.");
-        var overlap = await db.WeeklySchedules.AnyAsync(x => (!excludingId.HasValue || x.Id != excludingId.Value) && x.DayOfWeek == request.DayOfWeek && x.StartTime < request.EndTime && x.EndTime > request.StartTime && (x.StudentId == request.StudentId || x.TeacherId == request.TeacherId), ct);
-        if (overlap) throw new AppException(409, ErrorCodes.Validation, "يوجد تعارض مع موعد آخر للطالب أو المدرس.");
-    }
-
-    private async Task<WeeklyScheduleResponse> BuildResponse(WeeklySchedule schedule, CancellationToken ct)
-    {
-        var names = await (from student in db.Students.AsNoTracking() where student.Id == schedule.StudentId from teacher in db.Teachers.AsNoTracking().Where(x => x.Id == schedule.TeacherId) from subject in db.Subjects.AsNoTracking().Where(x => x.Id == schedule.SubjectId) select new { StudentName = student.FullName, TeacherName = teacher.FullName, SubjectName = subject.NameAr, teacher.ZoomMeetingUrl }).SingleAsync(ct);
-        return Map(schedule, names.StudentName, names.TeacherName, names.SubjectName, names.ZoomMeetingUrl);
-    }
-
-    private static WeeklyScheduleResponse Map(WeeklySchedule x, string student, string teacher, string subject, string? teacherZoom)
-        => new(x.Id, x.StudentId, student, x.TeacherId, teacher, x.SubjectId, subject, x.DayOfWeek, ArabicDay(x.DayOfWeek), x.StartTime, x.EndTime, x.StartTime.ToString("HH:mm"), $"{x.StartTime:HH:mm} - {x.EndTime:HH:mm}", x.StartTime.Hour < 12 ? "am" : "pm", Themes[x.SubjectId.ToByteArray()[0] % Themes.Length], x.ZoomUrl ?? teacherZoom, teacher, student, x.ZoomUrl ?? teacherZoom);
+    private static DateTimeOffset AtCairo(DateOnly date) { var local = date.ToDateTime(TimeOnly.MinValue, DateTimeKind.Unspecified); return new DateTimeOffset(local, CairoTimeZone.GetUtcOffset(local)); }
     private static string ArabicDay(DayOfWeek day) => day switch { DayOfWeek.Saturday => "السبت", DayOfWeek.Sunday => "الأحد", DayOfWeek.Monday => "الإثنين", DayOfWeek.Tuesday => "الثلاثاء", DayOfWeek.Wednesday => "الأربعاء", DayOfWeek.Thursday => "الخميس", _ => "الجمعة" };
+    private static TimeZoneInfo FindCairoTimeZone() { foreach (var id in new[] { "Egypt Standard Time", "Africa/Cairo" }) try { return TimeZoneInfo.FindSystemTimeZoneById(id); } catch (TimeZoneNotFoundException) { } return TimeZoneInfo.Utc; }
 }

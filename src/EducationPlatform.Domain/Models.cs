@@ -12,6 +12,7 @@ public static class Roles
 
 public enum AccountStatus { Active, Inactive, Suspended }
 public enum SessionStatus { Scheduled, AttendancePending, Confirmed, Completed, Cancelled, NoShow, Rejected }
+public enum SessionRecurrenceType { Once, Weekly, Monthly }
 public enum AttendanceStatus { Pending, Confirmed, Rejected }
 public enum CreditTransactionType { Purchase, SessionDeduction, ManualAdjustment, Refund, Correction }
 public enum SubmissionStatus { Draft, Submitted, Late, Graded, Returned }
@@ -54,7 +55,6 @@ public sealed class Teacher : SoftDeleteEntity
     public string? EWalletNumber { get; set; }
     public string? InstaPayIdentifier { get; set; }
     public string? PaymentDetails { get; set; }
-    public string? ZoomMeetingUrl { get; set; }
     public string DefaultCurrency { get; set; } = "EGP";
     public AccountStatus Status { get; set; } = AccountStatus.Active;
     public ICollection<TeacherSubject> Subjects { get; set; } = [];
@@ -74,7 +74,7 @@ public sealed class StudentSubject { public Guid StudentId { get; set; } public 
 public sealed class TeacherStudentAssignment : SoftDeleteEntity { public Guid TeacherId { get; set; } public Guid StudentId { get; set; } public Guid SubjectId { get; set; } public decimal SessionPrice { get; set; } public string Currency { get; set; } = "EGP"; public DateTimeOffset AssignedAt { get; set; } }
 public sealed class WeeklySchedule : SoftDeleteEntity { public Guid StudentId { get; set; } public Guid TeacherId { get; set; } public Guid SubjectId { get; set; } public DayOfWeek DayOfWeek { get; set; } public TimeOnly StartTime { get; set; } public TimeOnly EndTime { get; set; } public string? ZoomUrl { get; set; } public Student Student { get; set; } = null!; public Teacher Teacher { get; set; } = null!; public Subject Subject { get; set; } = null!; }
 
-public sealed class ClassSession : Entity
+public sealed class ClassSession : SoftDeleteEntity
 {
     public Guid StudentId { get; set; }
     public Guid TeacherId { get; set; }
@@ -82,6 +82,8 @@ public sealed class ClassSession : Entity
     public DateTimeOffset ScheduledAt { get; set; }
     public int DurationMinutes { get; set; }
     public string? ClassLink { get; set; }
+    public SessionRecurrenceType RecurrenceType { get; set; } = SessionRecurrenceType.Once;
+    public DateTimeOffset? RecurrenceEndDate { get; set; }
     public SessionStatus Status { get; set; } = SessionStatus.Scheduled;
     public AttendanceStatus? AttendanceStatus { get; set; }
     public decimal TeacherRateSnapshot { get; set; }
