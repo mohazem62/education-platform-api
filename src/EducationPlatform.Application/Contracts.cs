@@ -46,7 +46,7 @@ public sealed record RefreshRequest(string RefreshToken, string? Device);
 public sealed record ChangePasswordRequest(string CurrentPassword, string NewPassword);
 public sealed record ForgotPasswordRequest(string Email);
 public sealed record ResetPasswordRequest(string Email, string Token, string NewPassword);
-public sealed record CurrentUserResponse(string Id, string UserName, string? Email, IReadOnlyList<string> Roles);
+public sealed record CurrentUserResponse(string Id, string UserName, string FullName, string? Email, IReadOnlyList<string> Roles);
 public sealed record AuthResponse(string AccessToken, DateTimeOffset AccessTokenExpiresAt, string RefreshToken, DateTimeOffset RefreshTokenExpiresAt, CurrentUserResponse User);
 
 public sealed record StudentTeacherAssignmentRequest(Guid SubjectId, Guid TeacherId, decimal SessionPrice, string Currency);
@@ -58,7 +58,7 @@ public sealed record TeacherStageRateRequest(Guid GradeLevelId, decimal Rate, st
 public sealed record TeacherStageRateResponse(Guid GradeLevelId, string GradeLevelName, decimal Rate, string Currency);
 public sealed record CreateTeacherRequest(string UserName, string Password, string FullName, string PhoneNumber, string? WhatsApp, decimal DefaultPerSessionRate, IReadOnlyList<Guid> SubjectIds, IReadOnlyList<Guid> CurriculumIds, string? PreferredPayoutMethod, string? EWalletNumber, string? InstaPayIdentifier, string DefaultCurrency = "EGP", IReadOnlyList<TeacherStageRateRequest>? StageRates = null);
 public sealed record UpdateTeacherRequest(string FullName, string PhoneNumber, string? WhatsApp, decimal DefaultPerSessionRate, IReadOnlyList<Guid> SubjectIds, IReadOnlyList<Guid> CurriculumIds, string? PreferredPayoutMethod, string? EWalletNumber, string? InstaPayIdentifier, string Status, string DefaultCurrency = "EGP", IReadOnlyList<TeacherStageRateRequest>? StageRates = null);
-public sealed record TeacherResponse(Guid Id, string FullName, string PhoneNumber, string? WhatsApp, decimal DefaultPerSessionRate, string Status, string? MaskedPayoutDestination, string DefaultCurrency = "EGP", IReadOnlyList<TeacherStageRateResponse>? StageRates = null);
+public sealed record TeacherResponse(Guid Id, string FullName, string PhoneNumber, string? WhatsApp, decimal DefaultPerSessionRate, string Status, string? MaskedPayoutDestination, string DefaultCurrency = "EGP", IReadOnlyList<TeacherStageRateResponse>? StageRates = null, IReadOnlyList<LookupResponse>? Subjects = null, IReadOnlyList<LookupResponse>? Curricula = null);
 public sealed record CreateModeratorRequest(string UserName, string Password, string FullName, string PhoneNumber);
 public sealed record UpdateModeratorRequest(string FullName, string PhoneNumber, string Status);
 public sealed record ModeratorResponse(Guid Id, string UserName, string FullName, string PhoneNumber, string Status);
@@ -112,9 +112,9 @@ public interface IEmailSender { Task SendAsync(string address, string subject, s
 public interface IWhatsAppSender { Task SendAsync(string phone, string message, CancellationToken ct); }
 
 public sealed class LoginRequestValidator : AbstractValidator<LoginRequest> { public LoginRequestValidator() { RuleFor(x => x.UserName).NotEmpty(); RuleFor(x => x.Password).NotEmpty(); } }
-public sealed class CreateStudentValidator : AbstractValidator<CreateStudentRequest> { public CreateStudentValidator() { RuleFor(x => x.FullName).NotEmpty().MaximumLength(200); RuleFor(x => x.PhoneNumber).NotEmpty().Matches(@"^(?:\+?20|0)?1[0125]\d{8}$"); RuleFor(x => x.Password).MinimumLength(8); RuleFor(x => x.SubjectIds).NotEmpty(); RuleForEach(x => x.TeacherAssignments).ChildRules(x => { x.RuleFor(y => y.SessionPrice).GreaterThanOrEqualTo(0); x.RuleFor(y => y.Currency).NotEmpty().Length(3); }); } }
-public sealed class CreateTeacherValidator : AbstractValidator<CreateTeacherRequest> { public CreateTeacherValidator() { RuleFor(x => x.FullName).NotEmpty().MaximumLength(200); RuleFor(x => x.PhoneNumber).NotEmpty().Matches(@"^(?:\+?20|0)?1[0125]\d{8}$"); RuleFor(x => x.DefaultPerSessionRate).GreaterThanOrEqualTo(0); RuleFor(x => x.DefaultCurrency).NotEmpty().Length(3); RuleFor(x => x.Password).MinimumLength(8); RuleForEach(x => x.StageRates).ChildRules(x => { x.RuleFor(y => y.Rate).GreaterThanOrEqualTo(0); x.RuleFor(y => y.Currency).NotEmpty().Length(3); }); } }
-public sealed class CreateModeratorValidator : AbstractValidator<CreateModeratorRequest> { public CreateModeratorValidator() { RuleFor(x => x.UserName).NotEmpty(); RuleFor(x => x.Password).MinimumLength(8); RuleFor(x => x.FullName).NotEmpty().MaximumLength(200); RuleFor(x => x.PhoneNumber).NotEmpty().Matches(@"^(?:\+?20|0)?1[0125]\d{8}$"); } }
+public sealed class CreateStudentValidator : AbstractValidator<CreateStudentRequest> { public CreateStudentValidator() { RuleFor(x => x.FullName).NotEmpty().MaximumLength(200); RuleFor(x => x.PhoneNumber).NotEmpty(); RuleFor(x => x.Password).MinimumLength(8); RuleFor(x => x.SubjectIds).NotEmpty(); RuleForEach(x => x.TeacherAssignments).ChildRules(x => { x.RuleFor(y => y.SessionPrice).GreaterThanOrEqualTo(0); x.RuleFor(y => y.Currency).NotEmpty().Length(3); }); } }
+public sealed class CreateTeacherValidator : AbstractValidator<CreateTeacherRequest> { public CreateTeacherValidator() { RuleFor(x => x.FullName).NotEmpty().MaximumLength(200); RuleFor(x => x.PhoneNumber).NotEmpty(); RuleFor(x => x.DefaultPerSessionRate).GreaterThanOrEqualTo(0); RuleFor(x => x.DefaultCurrency).NotEmpty().Length(3); RuleFor(x => x.Password).MinimumLength(8); RuleForEach(x => x.StageRates).ChildRules(x => { x.RuleFor(y => y.Rate).GreaterThanOrEqualTo(0); x.RuleFor(y => y.Currency).NotEmpty().Length(3); }); } }
+public sealed class CreateModeratorValidator : AbstractValidator<CreateModeratorRequest> { public CreateModeratorValidator() { RuleFor(x => x.UserName).NotEmpty(); RuleFor(x => x.Password).MinimumLength(8); RuleFor(x => x.FullName).NotEmpty().MaximumLength(200); RuleFor(x => x.PhoneNumber).NotEmpty(); } }
 public sealed class CreateSessionValidator : AbstractValidator<CreateSessionRequest> { public CreateSessionValidator() { RuleFor(x => x.DurationMinutes).InclusiveBetween(15, 480); RuleFor(x => x.StudentCreditCost).InclusiveBetween(1, 10); RuleFor(x => x.ScheduledAt).NotEmpty(); RuleFor(x => x.RecurrenceType).IsInEnum(); RuleFor(x => x.RecurrenceEndDate).GreaterThanOrEqualTo(x => x.ScheduledAt).When(x => x.RecurrenceEndDate.HasValue); RuleFor(x => x.ClassLink).Must(IsValidUrl).When(x => !string.IsNullOrWhiteSpace(x.ClassLink)).WithMessage("رابط الحصة غير صالح."); } private static bool IsValidUrl(string? value) => Uri.TryCreate(value, UriKind.Absolute, out var uri) && uri.Scheme is "http" or "https"; }
 public sealed class UpdateSessionValidator : AbstractValidator<UpdateSessionRequest> { public UpdateSessionValidator() { RuleFor(x => x.DurationMinutes).InclusiveBetween(15, 480); RuleFor(x => x.StudentCreditCost).InclusiveBetween(1, 10); RuleFor(x => x.ScheduledAt).NotEmpty(); RuleFor(x => x.RecurrenceType).IsInEnum(); RuleFor(x => x.RecurrenceEndDate).GreaterThanOrEqualTo(x => x.ScheduledAt).When(x => x.RecurrenceEndDate.HasValue); RuleFor(x => x.ClassLink).Must(IsValidUrl).When(x => !string.IsNullOrWhiteSpace(x.ClassLink)).WithMessage("رابط الحصة غير صالح."); } private static bool IsValidUrl(string? value) => Uri.TryCreate(value, UriKind.Absolute, out var uri) && uri.Scheme is "http" or "https"; }
 public sealed class PaymentValidator : AbstractValidator<PaymentRequest> { public PaymentValidator() { RuleFor(x => x.Amount).GreaterThan(0); RuleFor(x => x.Currency).Length(3); RuleFor(x => x.IdempotencyKey).NotEmpty().MaximumLength(100); RuleFor(x => x.PurchasedCredits).GreaterThanOrEqualTo(0); } }
@@ -125,9 +125,7 @@ public static class PhoneNormalizer
     public static string Normalize(string value)
     {
         var digits = new string(value.Where(char.IsDigit).ToArray());
-        if (digits.StartsWith("20") && digits.Length == 12) digits = "0" + digits[2..];
-        if (digits.Length == 10 && digits.StartsWith('1')) digits = "0" + digits;
-        return digits;
+        return value.TrimStart().StartsWith('+') ? "+" + digits : digits;
     }
     public static string? Mask(string? value) => string.IsNullOrWhiteSpace(value) || value.Length < 6 ? value : value[..2] + new string('*', value.Length - 5) + value[^3..];
 }

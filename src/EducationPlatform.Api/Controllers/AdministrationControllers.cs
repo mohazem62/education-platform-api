@@ -113,11 +113,11 @@ public sealed class SchedulesController(AppDbContext db, ICurrentUser current, I
     private static readonly TimeZoneInfo CairoTimeZone = FindCairoTimeZone();
 
     [HttpGet]
-    public async Task<ActionResult<ApiResponse<PageResult<WeeklyScheduleResponse>>>> List([FromQuery] PageRequest page, [FromQuery] DateOnly? weekStart, [FromQuery] Guid? studentId, [FromQuery] Guid? teacherId, [FromQuery] Guid? subjectId, CancellationToken ct)
+    public async Task<ActionResult<ApiResponse<PageResult<WeeklyScheduleResponse>>>> List([FromQuery] PageRequest page, [FromQuery] DateOnly? weekStart, [FromQuery] DateOnly? date, [FromQuery] Guid? studentId, [FromQuery] Guid? teacherId, [FromQuery] Guid? subjectId, CancellationToken ct)
     {
         var localToday = DateOnly.FromDateTime(TimeZoneInfo.ConvertTime(clock.UtcNow, CairoTimeZone).DateTime);
-        var startDate = weekStart ?? localToday.AddDays(-(((int)localToday.DayOfWeek - (int)DayOfWeek.Saturday + 7) % 7));
-        var from = AtCairo(startDate); var to = AtCairo(startDate.AddDays(7));
+        var startDate = date ?? weekStart ?? localToday.AddDays(-(((int)localToday.DayOfWeek - (int)DayOfWeek.Saturday + 7) % 7));
+        var from = AtCairo(startDate); var to = AtCairo(startDate.AddDays(date.HasValue ? 1 : 7));
         var query = db.Sessions.AsNoTracking().Where(x => x.ScheduledAt < to &&
             (x.RecurrenceType == SessionRecurrenceType.Once ? x.ScheduledAt >= from : x.RecurrenceEndDate == null || x.RecurrenceEndDate >= from));
         if (User.IsInRole(Roles.Student))

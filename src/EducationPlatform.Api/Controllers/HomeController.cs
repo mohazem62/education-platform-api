@@ -18,12 +18,29 @@ public sealed class HomeController(AppDbContext db, ICurrentUser current, IDateT
     {
         var isTeacher = User.IsInRole(Roles.Teacher);
         var isStudent = User.IsInRole(Roles.Student);
-        if (!isTeacher && !isStudent) throw new AppException(403, ErrorCodes.Forbidden, "This endpoint is available to teachers and students only.");
+        var isModerator = User.IsInRole(Roles.Moderator);
+        if (!isTeacher && !isStudent && !isModerator) throw new AppException(403, ErrorCodes.Forbidden, "هذا المسار متاح للطالب والمعلم والمشرف فقط.");
 
         var now = clock.UtcNow;
         var localNow = TimeZoneInfo.ConvertTime(now, CairoTimeZone);
         var monthStart = AtCairo(new DateOnly(localNow.Year, localNow.Month, 1));
         var nextMonth = AtCairo(new DateOnly(localNow.Year, localNow.Month, 1).AddMonths(1));
+        if (isModerator)
+        {
+            var moderatorMonthSessions = await LoadAllSessions(monthStart, nextMonth, ct);
+            var moderatorCandidates = await LoadAllSessions(now.AddHours(-8), now.AddDays(30), ct);
+            var moderatorCurrentSession = moderatorCandidates.FirstOrDefault(x => x.ScheduledAt <= now && x.ScheduledAt.AddMinutes(x.DurationMinutes) > now)
+                                          ?? moderatorCandidates.FirstOrDefault(x => x.ScheduledAt > now);
+            var gradeRows = await (from submission in db.AssignmentSubmissions.AsNoTracking()
+                                   join assignment in db.Assignments.AsNoTracking() on submission.AssignmentId equals assignment.Id
+                                   where submission.Status == SubmissionStatus.Graded && submission.Grade.HasValue
+                                   select new { Grade = submission.Grade!.Value, assignment.MaxGrade }).ToListAsync(ct);
+            var moderatorAverage = gradeRows.Count == 0 ? 0 : Math.Round(gradeRows.Average(x => x.MaxGrade == 0 ? 0 : x.Grade * 100m / x.MaxGrade), 2);
+            return Ok(ApiResponse<HomeCardsResponse>.Ok(new(Roles.Moderator, moderatorAverage, await db.Subjects.CountAsync(ct),
+                new(moderatorMonthSessions.Count(x => x.Status == SessionStatus.Completed), moderatorMonthSessions.Count, $"{localNow:yyyy-MM}"),
+                moderatorCurrentSession is null ? null : MapModerator(moderatorCurrentSession, now))));
+        }
+
         Guid profileId;
         int registeredSubjects;
         List<(decimal Grade, decimal MaxGrade)> grades;
@@ -92,6 +109,18 @@ public sealed class HomeController(AppDbContext db, ICurrentUser current, IDateT
             var balance = await db.Students.Where(x => x.Id == profileId).Select(x => x.SessionCreditBalance).SingleAsync(ct);
             sessionQuery = sessionQuery.Where(x => x.StudentId == profileId && x.StudentCreditCost <= balance);
         }
+        return await ProjectSessions(sessionQuery, rangeStart, rangeEnd, ct);
+    }
+
+    private async Task<List<HomeSessionRow>> LoadAllSessions(DateTimeOffset rangeStart, DateTimeOffset rangeEnd, CancellationToken ct)
+    {
+        var sessionQuery = db.Sessions.AsNoTracking().Where(x => x.ScheduledAt < rangeEnd &&
+            (x.RecurrenceType == SessionRecurrenceType.Once ? x.ScheduledAt >= rangeStart : x.RecurrenceEndDate == null || x.RecurrenceEndDate >= rangeStart));
+        return await ProjectSessions(sessionQuery, rangeStart, rangeEnd, ct);
+    }
+
+    private async Task<List<HomeSessionRow>> ProjectSessions(IQueryable<ClassSession> sessionQuery, DateTimeOffset rangeStart, DateTimeOffset rangeEnd, CancellationToken ct)
+    {
         var rows = await (from session in sessionQuery
                           join subject in db.Subjects.AsNoTracking() on session.SubjectId equals subject.Id
                           join teacher in db.Teachers.AsNoTracking() on session.TeacherId equals teacher.Id
@@ -108,6 +137,16 @@ public sealed class HomeController(AppDbContext db, ICurrentUser current, IDateT
         var end = local.AddMinutes(row.DurationMinutes);
         var oppositeName = isTeacher ? row.StudentName : row.TeacherName;
         return new(row.Id, row.Subject, isTeacher ? null : row.TeacherName, oppositeName, ArabicDay(local.DayOfWeek),
+            local.ToString("HH:mm"), $"{local:HH:mm} - {end:HH:mm}", local.Hour < 12 ? "am" : "pm",
+            Themes[row.SubjectId.ToByteArray()[0] % Themes.Length], row.ClassLink, row.ScheduledAt, row.DurationMinutes,
+            row.Status.ToString(), row.ScheduledAt <= now && row.ScheduledAt.AddMinutes(row.DurationMinutes) > now);
+    }
+
+    private static HomeClassItemResponse MapModerator(HomeSessionRow row, DateTimeOffset now)
+    {
+        var local = TimeZoneInfo.ConvertTime(row.ScheduledAt, CairoTimeZone);
+        var end = local.AddMinutes(row.DurationMinutes);
+        return new(row.Id, row.Subject, row.TeacherName, row.StudentName, ArabicDay(local.DayOfWeek),
             local.ToString("HH:mm"), $"{local:HH:mm} - {end:HH:mm}", local.Hour < 12 ? "am" : "pm",
             Themes[row.SubjectId.ToByteArray()[0] % Themes.Length], row.ClassLink, row.ScheduledAt, row.DurationMinutes,
             row.Status.ToString(), row.ScheduledAt <= now && row.ScheduledAt.AddMinutes(row.DurationMinutes) > now);
