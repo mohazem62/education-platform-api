@@ -175,6 +175,8 @@ public sealed class CatalogService(AppDbContext db) : ICatalogService
 
 public sealed class SessionService(AppDbContext db, ICurrentUser current, IDateTimeProvider clock) : ISessionService
 {
+    private static readonly TimeZoneInfo CairoTimeZone = FindCairoTimeZone();
+
     public async Task<SessionResponse> CreateAsync(CreateSessionRequest r, CancellationToken ct)
     {
         var pricing = await Pricing(r.StudentId, r.TeacherId, r.SubjectId, ct);
@@ -268,10 +270,17 @@ public sealed class SessionService(AppDbContext db, ICurrentUser current, IDateT
     }
     private static AppException ConflictError(string code, string owner, string field, ClassSession existing, SessionTimeConflict conflict)
     {
-        var start = conflict.ExistingOccurrence.ToString("yyyy-MM-dd HH:mm 'UTC'");
-        var end = conflict.ExistingOccurrence.AddMinutes(existing.DurationMinutes).ToString("HH:mm 'UTC'");
+        var start = TimeZoneInfo.ConvertTime(conflict.ExistingOccurrence, CairoTimeZone);
+        var end = TimeZoneInfo.ConvertTime(conflict.ExistingOccurrence.AddMinutes(existing.DurationMinutes), CairoTimeZone);
         return new AppException(409, code,
-            $"يوجد تعارض في الموعد: {owner} لديه حصة أخرى من {start} إلى {end} (sessionId: {existing.Id}). غيّر scheduledAt أو durationMinutes.", field);
+            $"يوجد تعارض في الموعد: {owner} لديه حصة أخرى يوم {start:yyyy-MM-dd} من {start:HH:mm} إلى {end:HH:mm} بتوقيت القاهرة (sessionId: {existing.Id}). غيّر scheduledAt أو durationMinutes.", field);
+    }
+    private static TimeZoneInfo FindCairoTimeZone()
+    {
+        foreach (var id in new[] { "Egypt Standard Time", "Africa/Cairo" })
+            try { return TimeZoneInfo.FindSystemTimeZoneById(id); }
+            catch (TimeZoneNotFoundException) { }
+        return TimeZoneInfo.Utc;
     }
     private static SessionResponse Map(ClassSession x) => new(x.Id, x.StudentId, x.TeacherId, x.SubjectId, x.ScheduledAt, x.DurationMinutes, x.ClassLink, x.Status.ToString(), x.AttendanceStatus?.ToString(), x.TeacherRateSnapshot, x.StudentCreditCost, x.TeacherRateCurrencySnapshot, x.StudentPriceSnapshot, x.StudentPriceCurrencySnapshot, x.RecurrenceType, x.RecurrenceEndDate);
     private sealed record SessionPricing(decimal TeacherRate, string TeacherCurrency, decimal StudentPrice, string StudentCurrency);
