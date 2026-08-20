@@ -11,7 +11,7 @@ public static class SwaggerTagging
     public const string Authentication = "Authentication";
     public const string Student = "Student APIs";
     public const string Teacher = "Teacher APIs";
-    public const string AdminPartner = "Admin & Partner APIs";
+    public const string AdminPartner = "Admin, Moderator & Partner APIs";
     public const string Shared = "Shared APIs";
 
     public static readonly string[] OrderedTags = [Authentication, Student, Teacher, AdminPartner, Shared];
@@ -32,17 +32,16 @@ public static class SwaggerTagging
         var policies = authorization.Select(x => x.Policy).Where(x => !string.IsNullOrWhiteSpace(x)).ToHashSet(StringComparer.Ordinal);
         var roles = authorization.SelectMany(x => (x.Roles ?? string.Empty).Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)).ToHashSet(StringComparer.OrdinalIgnoreCase);
 
+        var tags = new List<string>();
         if (policies.Contains("StudentOnly") || roles.Contains("Student"))
-            return [Student];
+            tags.Add(Student);
         if (policies.Contains("TeacherOnly") || roles.Contains("Teacher"))
-            return [Teacher];
-        if (policies.Overlaps(["AcademicOperations", "FinancialAdmin", "PartnerOnly"]) || roles.Overlaps(["Admin", "Moderator", "Partner"]))
-            return [AdminPartner];
+            tags.Add(Teacher);
+        if (policies.Overlaps(["AcademicOperations", "FinancialAdmin", "PartnerOnly"]) ||
+            roles.Overlaps(["Admin", "Moderator", "Partner"]) || action.ControllerName == "PartnerDividends")
+            tags.Add(AdminPartner);
 
-        if (action.ControllerName == "PartnerDividends")
-            return [AdminPartner];
-
-        return [Shared];
+        return tags.Count > 0 ? tags : [Shared];
     }
 }
 
