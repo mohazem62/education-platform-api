@@ -216,13 +216,21 @@ public sealed class SessionService(AppDbContext db, ICurrentUser current, IDateT
         var student = await db.Students.Where(x => x.UserId == current.UserId)
             .Select(x => new { Id = (Guid?)x.Id, x.SessionCreditBalance }).SingleOrDefaultAsync(ct);
         if (student?.Id.HasValue == true)
-            q = q.Where(x => x.StudentId == student.Id && x.StudentCreditCost <= student.SessionCreditBalance);
+            q = q.Where(x => x.StudentId == student.Id && (x.StudentCreditCost <= student.SessionCreditBalance || x.Status == SessionStatus.Completed));
         var n = Math.Max(1, p.PageNumber); var z = Math.Clamp(p.PageSize, 1, 100); var count = await q.CountAsync(ct); var rows = await q.OrderByDescending(x => x.ScheduledAt).Skip((n - 1) * z).Take(z).Select(x => Map(x)).ToListAsync(ct); return new(rows, n, z, count);
     }
     public async Task RequestAttendanceAsync(AttendanceRequestDto r, CancellationToken ct)
     {
-        var student = await db.Students.SingleOrDefaultAsync(x => x.UserId == current.UserId, ct) ?? throw new AppException(403, ErrorCodes.Forbidden, "غير مسموح بهذا المورد.");
-        var session = await db.Sessions.SingleOrDefaultAsync(x => x.Id == r.SessionId && x.StudentId == student.Id, ct) ?? throw new AppException(404, ErrorCodes.SessionNotFound, "الجلسة غير موجودة.");
+        var studentProfileId = await db.Students.Where(x => x.UserId == current.UserId).Select(x => (Guid?)x.Id).SingleOrDefaultAsync(ct);
+        var teacherProfileId = await db.Teachers.Where(x => x.UserId == current.UserId).Select(x => (Guid?)x.Id).SingleOrDefaultAsync(ct);
+        if (!studentProfileId.HasValue && !teacherProfileId.HasValue)
+            throw new AppException(403, ErrorCodes.Forbidden, "طلب الحضور متاح للطالب أو المعلم فقط.");
+
+        var session = await db.Sessions.SingleOrDefaultAsync(x => x.Id == r.SessionId &&
+            ((studentProfileId.HasValue && x.StudentId == studentProfileId.Value) ||
+             (teacherProfileId.HasValue && x.TeacherId == teacherProfileId.Value)), ct)
+            ?? throw new AppException(404, ErrorCodes.SessionNotFound, "الجلسة غير موجودة أو غير مسندة إلى هذا الحساب.");
+        var student = await db.Students.SingleAsync(x => x.Id == session.StudentId, ct);
         if (!CreditRules.CanAttend(student.SessionCreditBalance, session.StudentCreditCost))
             throw new AppException(409, ErrorCodes.InsufficientBalance,
                 $"لا يمكن طلب حضور هذه الحصة لأن رصيد الطالب ({student.SessionCreditBalance}) أقل من تكلفة الحصة ({session.StudentCreditCost}). اشحن الرصيد أولًا.",

@@ -28,7 +28,7 @@ public sealed class StudentsController(IStudentService service) : ControllerBase
     [HttpPut("{id:guid}")] public async Task<ActionResult<ApiResponse<StudentResponse>>> Update(Guid id, UpdateStudentRequest request, CancellationToken ct) => Ok(ApiResponse<StudentResponse>.Ok(await service.UpdateAsync(id, request, ct)));
     [HttpDelete("{id:guid}")] public async Task<IActionResult> Archive(Guid id, CancellationToken ct) { await service.ArchiveAsync(id, ct); return NoContent(); }
     [HttpPost("{id:guid}/restore"), Authorize(Roles = "Admin")] public async Task<IActionResult> Restore(Guid id, CancellationToken ct) { await service.RestoreAsync(id, ct); return NoContent(); }
-    [HttpPost("{id:guid}/credits/adjust"), Authorize(Roles = "Admin")] public async Task<IActionResult> Credits(Guid id, CreditAdjustmentRequest request, CancellationToken ct) { await service.AdjustCreditsAsync(id, request, ct); return NoContent(); }
+    [HttpPost("{id:guid}/credits/adjust"), Authorize(Roles = "Admin,Moderator")] public async Task<IActionResult> Credits(Guid id, CreditAdjustmentRequest request, CancellationToken ct) { await service.AdjustCreditsAsync(id, request, ct); return NoContent(); }
     [HttpPost("{id:guid}/payments"), Authorize(Roles = "Admin")] public async Task<IActionResult> Payment(Guid id, PaymentRequest request, CancellationToken ct) { await service.RecordPaymentAsync(id, request, ct); return NoContent(); }
 }
 
@@ -87,7 +87,7 @@ public sealed class AttendanceController(ISessionService service, AppDbContext d
 
         return Ok(ApiResponse<IReadOnlyList<AttendanceListItemResponse>>.Ok(rows));
     }
-    [HttpPost("requests"), Authorize(Policy = "StudentOnly")] public async Task<IActionResult> CreateRequest(AttendanceRequestDto request, CancellationToken ct) { await service.RequestAttendanceAsync(request, ct); return StatusCode(201, ApiResponse<object>.Ok(new { })); }
+    [HttpPost("requests"), Authorize(Roles = "Student,Teacher")] public async Task<IActionResult> CreateRequest(AttendanceRequestDto request, CancellationToken ct) { await service.RequestAttendanceAsync(request, ct); return StatusCode(201, ApiResponse<object>.Ok(new { })); }
     [HttpPost("{id:guid}/confirm"), Authorize(Policy = "AcademicOperations")] public async Task<IActionResult> Confirm(Guid id, AttendanceDecisionRequest request, CancellationToken ct) { await service.ConfirmAttendanceAsync(id, request, ct); return NoContent(); }
     [HttpPost("{id:guid}/reject"), Authorize(Policy = "AcademicOperations")] public async Task<IActionResult> Reject(Guid id, AttendanceDecisionRequest request, CancellationToken ct) { await service.RejectAttendanceAsync(id, request, ct); return NoContent(); }
 }

@@ -107,7 +107,7 @@ public sealed class HomeController(AppDbContext db, ICurrentUser current, IDateT
         else
         {
             var balance = await db.Students.Where(x => x.Id == profileId).Select(x => x.SessionCreditBalance).SingleAsync(ct);
-            sessionQuery = sessionQuery.Where(x => x.StudentId == profileId && x.StudentCreditCost <= balance);
+            sessionQuery = sessionQuery.Where(x => x.StudentId == profileId && (x.StudentCreditCost <= balance || x.Status == SessionStatus.Completed));
         }
         return await ProjectSessions(sessionQuery, rangeStart, rangeEnd, ct);
     }

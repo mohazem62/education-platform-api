@@ -124,7 +124,7 @@ public sealed class SchedulesController(AppDbContext db, ICurrentUser current, I
         {
             var student = await db.Students.Where(x => x.UserId == current.UserId)
                 .Select(x => new { x.Id, x.SessionCreditBalance }).SingleAsync(ct);
-            query = query.Where(x => x.StudentId == student.Id && x.StudentCreditCost <= student.SessionCreditBalance);
+            query = query.Where(x => x.StudentId == student.Id && (x.StudentCreditCost <= student.SessionCreditBalance || x.Status == SessionStatus.Completed));
         }
         else if (User.IsInRole(Roles.Teacher)) { var id = await db.Teachers.Where(x => x.UserId == current.UserId).Select(x => x.Id).SingleAsync(ct); query = query.Where(x => x.TeacherId == id); }
         else { if (studentId.HasValue) query = query.Where(x => x.StudentId == studentId); if (teacherId.HasValue) query = query.Where(x => x.TeacherId == teacherId); }
@@ -138,6 +138,33 @@ public sealed class SchedulesController(AppDbContext db, ICurrentUser current, I
             .Select(at => Map(row.Session, row.StudentName, row.TeacherName, row.SubjectName, at))).OrderBy(x => x.OccurrenceAt).ToList();
         var number = Math.Max(1, page.PageNumber); var size = Math.Clamp(page.PageSize, 1, 100); var total = occurrences.Count;
         return Ok(ApiResponse<PageResult<WeeklyScheduleResponse>>.Ok(new(occurrences.Skip((number - 1) * size).Take(size).ToList(), number, size, total)));
+    }
+
+    [HttpGet("daily"), Authorize(Policy = "AcademicOperations")]
+    public async Task<ActionResult<ApiResponse<PageResult<DailySupervisionScheduleResponse>>>> Daily([FromQuery] PageRequest page, [FromQuery] DateOnly? date, [FromQuery] Guid? studentId, [FromQuery] Guid? teacherId, [FromQuery] Guid? subjectId, CancellationToken ct)
+    {
+        var selectedDate = date ?? DateOnly.FromDateTime(TimeZoneInfo.ConvertTime(clock.UtcNow, CairoTimeZone).DateTime);
+        var from = AtCairo(selectedDate); var to = AtCairo(selectedDate.AddDays(1));
+        var query = db.Sessions.AsNoTracking().Where(x => x.ScheduledAt < to &&
+            (x.RecurrenceType == SessionRecurrenceType.Once ? x.ScheduledAt >= from : x.RecurrenceEndDate == null || x.RecurrenceEndDate >= from));
+        if (studentId.HasValue) query = query.Where(x => x.StudentId == studentId);
+        if (teacherId.HasValue) query = query.Where(x => x.TeacherId == teacherId);
+        if (subjectId.HasValue) query = query.Where(x => x.SubjectId == subjectId);
+        var rows = await (from session in query
+                          join student in db.Students.AsNoTracking() on session.StudentId equals student.Id
+                          join teacher in db.Teachers.AsNoTracking() on session.TeacherId equals teacher.Id
+                          join subject in db.Subjects.AsNoTracking() on session.SubjectId equals subject.Id
+                          select new { Session = session, StudentName = student.FullName, TeacherName = teacher.FullName, SubjectName = subject.NameAr }).ToListAsync(ct);
+        var occurrences = rows.SelectMany(row => SessionRecurrence.Expand(row.Session, from, to).Select(at =>
+        {
+            var local = TimeZoneInfo.ConvertTime(at, CairoTimeZone); var end = local.AddMinutes(row.Session.DurationMinutes);
+            return new DailySupervisionScheduleResponse(row.Session.Id, row.Session.StudentId, row.StudentName, row.Session.TeacherId,
+                row.TeacherName, row.Session.SubjectId, row.SubjectName, DateOnly.FromDateTime(local.DateTime), ArabicDay(local.DayOfWeek),
+                TimeOnly.FromDateTime(local.DateTime), TimeOnly.FromDateTime(end.DateTime), $"{local:HH:mm} - {end:HH:mm}",
+                row.Session.ClassLink, row.Session.Status.ToString(), at);
+        })).OrderBy(x => x.OccurrenceAt).ToList();
+        var number = Math.Max(1, page.PageNumber); var size = Math.Clamp(page.PageSize, 1, 100); var total = occurrences.Count;
+        return Ok(ApiResponse<PageResult<DailySupervisionScheduleResponse>>.Ok(new(occurrences.Skip((number - 1) * size).Take(size).ToList(), number, size, total)));
     }
 
     private static WeeklyScheduleResponse Map(ClassSession x, string student, string teacher, string subject, DateTimeOffset occurrenceAt)
