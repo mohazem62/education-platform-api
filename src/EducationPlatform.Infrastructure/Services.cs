@@ -186,6 +186,7 @@ public sealed class SessionService(AppDbContext db, ICurrentUser current, IDateT
     public async Task<SessionResponse> CreateAsync(CreateSessionRequest r, CancellationToken ct)
     {
         var pricing = await Pricing(r.StudentId, r.TeacherId, r.SubjectId, ct);
+        EnsureStudentHasCredit(pricing.StudentCreditBalance, r.StudentCreditCost);
         var x = new ClassSession();
         Apply(x, r.StudentId, r.TeacherId, r.SubjectId, r.ScheduledAt, r.DurationMinutes, r.ClassLink, r.StudentCreditCost, r.RecurrenceType, r.RecurrenceEndDate, pricing);
         await EnsureNoScheduleConflict(x, ct);
@@ -196,6 +197,7 @@ public sealed class SessionService(AppDbContext db, ICurrentUser current, IDateT
         var x = await db.Sessions.SingleOrDefaultAsync(x => x.Id == id, ct) ?? throw new AppException(404, ErrorCodes.SessionNotFound, "الجلسة غير موجودة.");
         if (x.Status is not (SessionStatus.Scheduled or SessionStatus.Cancelled) || await db.AttendanceRecords.AnyAsync(a => a.SessionId == id, ct)) throw new AppException(409, ErrorCodes.Validation, "لا يمكن تعديل جلسة بدأ عليها تسجيل حضور أو تسوية مالية.");
         var pricing = await Pricing(r.StudentId, r.TeacherId, r.SubjectId, ct);
+        EnsureStudentHasCredit(pricing.StudentCreditBalance, r.StudentCreditCost);
         var before = $"{x.ScheduledAt:O}|{x.RecurrenceType}";
         Apply(x, r.StudentId, r.TeacherId, r.SubjectId, r.ScheduledAt, r.DurationMinutes, r.ClassLink, r.StudentCreditCost, r.RecurrenceType, r.RecurrenceEndDate, pricing);
         await EnsureNoScheduleConflict(x, ct);
@@ -253,7 +255,14 @@ public sealed class SessionService(AppDbContext db, ICurrentUser current, IDateT
         var student = await db.Students.SingleOrDefaultAsync(x => x.Id == studentId, ct) ?? throw new AppException(404, ErrorCodes.StudentNotFound, "الطالب غير موجود.");
         var assignment = await db.TeacherStudentAssignments.SingleOrDefaultAsync(x => x.TeacherId == teacherId && x.StudentId == studentId && x.SubjectId == subjectId, ct) ?? throw new AppException(409, ErrorCodes.Validation, "المعلم غير مكلّف بهذا الطالب والمادة.");
         var stageRate = await db.TeacherGradeRates.Where(x => x.TeacherId == teacherId && x.GradeLevelId == student.GradeLevelId).Select(x => new { x.Rate, x.Currency }).SingleOrDefaultAsync(ct);
-        return new(stageRate?.Rate ?? teacher.DefaultPerSessionRate, stageRate?.Currency ?? teacher.DefaultCurrency, assignment.SessionPrice, assignment.Currency);
+        return new(stageRate?.Rate ?? teacher.DefaultPerSessionRate, stageRate?.Currency ?? teacher.DefaultCurrency, assignment.SessionPrice, assignment.Currency, student.SessionCreditBalance);
+    }
+    private static void EnsureStudentHasCredit(int balance, int cost)
+    {
+        if (!CreditRules.CanAttend(balance, cost))
+            throw new AppException(409, ErrorCodes.InsufficientBalance,
+                $"لا يمكن جدولة الحصة لأن رصيد الطالب ({balance}) أقل من تكلفة الحصة ({cost}). أضف رصيدًا للطالب أولًا.",
+                "studentCreditCost");
     }
     private static void Apply(ClassSession x, Guid studentId, Guid teacherId, Guid subjectId, DateTimeOffset scheduledAt, int durationMinutes, string? classLink, int studentCreditCost, SessionRecurrenceType recurrenceType, DateTimeOffset? recurrenceEndDate, SessionPricing pricing)
     {
@@ -296,7 +305,7 @@ public sealed class SessionService(AppDbContext db, ICurrentUser current, IDateT
         return TimeZoneInfo.Utc;
     }
     private static SessionResponse Map(ClassSession x) => new(x.Id, x.StudentId, x.TeacherId, x.SubjectId, x.ScheduledAt, x.DurationMinutes, x.ClassLink, x.Status.ToString(), x.AttendanceStatus?.ToString(), x.TeacherRateSnapshot, x.StudentCreditCost, x.TeacherRateCurrencySnapshot, x.StudentPriceSnapshot, x.StudentPriceCurrencySnapshot, x.RecurrenceType, x.RecurrenceEndDate);
-    private sealed record SessionPricing(decimal TeacherRate, string TeacherCurrency, decimal StudentPrice, string StudentCurrency);
+    private sealed record SessionPricing(decimal TeacherRate, string TeacherCurrency, decimal StudentPrice, string StudentCurrency, int StudentCreditBalance);
 }
 
 public sealed class LearningService(AppDbContext db, ICurrentUser current, IDateTimeProvider clock) : ILearningService
