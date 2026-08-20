@@ -66,7 +66,27 @@ public sealed class SessionsController(ISessionService service) : ControllerBase
 [ApiController, Route("api/v1/attendance"), Authorize]
 public sealed class AttendanceController(ISessionService service, AppDbContext db) : ControllerBase
 {
-    [HttpGet, Authorize(Policy = "AcademicOperations")] public async Task<IActionResult> List([FromQuery] string? status, CancellationToken ct) { var q = db.AttendanceRecords.AsNoTracking(); if (Enum.TryParse<EducationPlatform.Domain.AttendanceStatus>(status, true, out var parsed)) q = q.Where(x => x.Status == parsed); return Ok(ApiResponse<object>.Ok(await q.OrderByDescending(x => x.RequestedAt).Take(100).Select(x => new { x.Id, x.SessionId, x.StudentId, x.TeacherId, x.RequestedAt, x.ConfirmedAt, x.ConfirmedBy, status = x.Status.ToString(), x.Notes }).ToListAsync(ct))); }
+    [HttpGet, Authorize(Policy = "AcademicOperations")]
+    public async Task<ActionResult<ApiResponse<IReadOnlyList<AttendanceListItemResponse>>>> List([FromQuery] string? status, CancellationToken ct)
+    {
+        var attendance = db.AttendanceRecords.AsNoTracking();
+        if (Enum.TryParse<EducationPlatform.Domain.AttendanceStatus>(status, true, out var parsed))
+            attendance = attendance.Where(x => x.Status == parsed);
+
+        var rows = await (from record in attendance
+                          join session in db.Sessions.AsNoTracking() on record.SessionId equals session.Id
+                          join student in db.Students.AsNoTracking() on record.StudentId equals student.Id
+                          join teacher in db.Teachers.AsNoTracking() on record.TeacherId equals teacher.Id
+                          join subject in db.Subjects.AsNoTracking() on session.SubjectId equals subject.Id
+                          orderby record.RequestedAt descending
+                          select new AttendanceListItemResponse(record.Id, record.SessionId, record.StudentId, student.FullName,
+                              record.TeacherId, teacher.FullName, session.SubjectId, subject.NameAr, record.RequestedAt,
+                              record.ConfirmedAt, record.ConfirmedBy, record.Status.ToString(), record.Notes))
+            .Take(100)
+            .ToListAsync(ct);
+
+        return Ok(ApiResponse<IReadOnlyList<AttendanceListItemResponse>>.Ok(rows));
+    }
     [HttpPost("requests"), Authorize(Policy = "StudentOnly")] public async Task<IActionResult> CreateRequest(AttendanceRequestDto request, CancellationToken ct) { await service.RequestAttendanceAsync(request, ct); return StatusCode(201, ApiResponse<object>.Ok(new { })); }
     [HttpPost("{id:guid}/confirm"), Authorize(Policy = "AcademicOperations")] public async Task<IActionResult> Confirm(Guid id, AttendanceDecisionRequest request, CancellationToken ct) { await service.ConfirmAttendanceAsync(id, request, ct); return NoContent(); }
     [HttpPost("{id:guid}/reject"), Authorize(Policy = "AcademicOperations")] public async Task<IActionResult> Reject(Guid id, AttendanceDecisionRequest request, CancellationToken ct) { await service.RejectAttendanceAsync(id, request, ct); return NoContent(); }
